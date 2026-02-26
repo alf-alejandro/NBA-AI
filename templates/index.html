@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NBA Edge Alpha Bot</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #080f1c;
+      color: #dce8f8;
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      min-height: 100vh;
+    }
+
+    /* ── Header ── */
+    header {
+      background: linear-gradient(135deg, #0f1e3a 0%, #091629 100%);
+      border-bottom: 2px solid #f47c20;
+      padding: 18px 36px;
+      display: flex;
+      align-items: center;
+      gap: 18px;
+    }
+    header .ball { font-size: 2rem; }
+    header h1 { font-size: 1.5rem; font-weight: 700; color: #f47c20; }
+    header .sub { font-size: 0.8rem; color: #6a85a8; margin-top: 2px; }
+
+    /* ── Layout ── */
+    .container { max-width: 1100px; margin: 0 auto; padding: 28px 32px; }
+
+    /* ── Controls ── */
+    .controls {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      margin-bottom: 20px;
+      flex-wrap: wrap;
+    }
+
+    .badge {
+      background: #0f1e3a;
+      border: 1px solid #1e3a6a;
+      border-radius: 8px;
+      padding: 8px 16px;
+      font-size: 0.85rem;
+      color: #6a85a8;
+    }
+    .badge span { color: #dce8f8; font-weight: 600; }
+
+    #runBtn {
+      background: #f47c20;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      padding: 11px 26px;
+      font-size: 0.95rem;
+      font-weight: 700;
+      cursor: pointer;
+      transition: background 0.2s, transform 0.15s;
+      letter-spacing: 0.3px;
+    }
+    #runBtn:hover:not(:disabled) { background: #d96310; transform: translateY(-1px); }
+    #runBtn:disabled { background: #3a4a60; cursor: not-allowed; }
+
+    /* ── Status bar ── */
+    .status-bar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 16px;
+      padding: 10px 16px;
+      background: #0f1e3a;
+      border-radius: 8px;
+      border-left: 4px solid #1e3a6a;
+      font-size: 0.88rem;
+      transition: border-color 0.3s;
+    }
+    .status-bar.running { border-color: #f47c20; }
+    .status-bar.done    { border-color: #22c55e; }
+    .status-bar.error   { border-color: #ef4444; }
+
+    .dot {
+      width: 9px; height: 9px;
+      border-radius: 50%;
+      background: #1e3a6a;
+      flex-shrink: 0;
+    }
+    .dot.pulse { background: #f47c20; animation: pulse 1.2s ease-in-out infinite; }
+    .dot.done  { background: #22c55e; }
+    .dot.error { background: #ef4444; }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50%       { opacity: 0.35; transform: scale(0.85); }
+    }
+
+    /* ── Output panel ── */
+    .panel {
+      background: #040b16;
+      border: 1px solid #0f1e3a;
+      border-radius: 12px;
+      overflow: hidden;
+    }
+    .panel-header {
+      background: #091629;
+      padding: 10px 18px;
+      border-bottom: 1px solid #0f1e3a;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 0.8rem;
+      color: #6a85a8;
+    }
+    .scroll-btn {
+      background: #0f1e3a;
+      color: #6a85a8;
+      border: 1px solid #1e3a6a;
+      border-radius: 5px;
+      padding: 3px 10px;
+      font-size: 0.75rem;
+      cursor: pointer;
+    }
+    .scroll-btn:hover { background: #1e3a6a; color: #dce8f8; }
+
+    #output {
+      padding: 18px 20px;
+      font-family: 'Courier New', 'Lucida Console', 'Consolas', monospace;
+      font-size: 0.8rem;
+      line-height: 1.65;
+      color: #b8d0f0;
+      min-height: 420px;
+      max-height: 75vh;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    #output:empty::before {
+      content: 'Presiona "Run Analysis" para comenzar el análisis de hoy.';
+      color: #2a3f60;
+      font-style: italic;
+    }
+
+    /* Colores para líneas especiales */
+    .line-scalp  { color: #fbbf24; font-weight: 700; }
+    .line-buy    { color: #34d399; font-weight: 700; }
+    .line-avoid  { color: #f87171; }
+    .line-header { color: #f47c20; }
+    .line-winner { color: #a78bfa; font-weight: 700; }
+
+    /* Scrollbar */
+    #output::-webkit-scrollbar { width: 6px; }
+    #output::-webkit-scrollbar-track { background: #040b16; }
+    #output::-webkit-scrollbar-thumb { background: #1e3a6a; border-radius: 3px; }
+    #output::-webkit-scrollbar-thumb:hover { background: #2e5aa8; }
+  </style>
+</head>
+<body>
+
+<header>
+  <span class="ball">🏀</span>
+  <div>
+    <h1>NBA Edge Alpha Bot</h1>
+    <div class="sub">v3.1 — Detector de oportunidades de valor en Polymarket NBA</div>
+  </div>
+</header>
+
+<div class="container">
+
+  <div class="controls">
+    <div class="badge">📅 Fecha: <span id="dateLabel"></span></div>
+    <div class="badge">🔢 Fórmula: <span>NEA = P_Poly − [0.45·Vegas + 0.40·N + 0.10·V + 0.05·R]</span></div>
+    <button id="runBtn" onclick="runAnalysis()">🚀 Run Analysis</button>
+  </div>
+
+  <div class="status-bar" id="statusBar">
+    <div class="dot" id="statusDot"></div>
+    <span id="statusText">Listo para analizar</span>
+  </div>
+
+  <div class="panel">
+    <div class="panel-header">
+      <span>📊 Output del análisis</span>
+      <button class="scroll-btn" onclick="scrollToBottom()">↓ Ir al final</button>
+    </div>
+    <div id="output"></div>
+  </div>
+
+</div>
+
+<script>
+  // ── Fecha ────────────────────────────────────────────────────────────────────
+  document.getElementById('dateLabel').textContent = new Date().toLocaleDateString('es-ES', {
+    weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
+  });
+
+  // ── Auto-scroll ──────────────────────────────────────────────────────────────
+  let autoScroll = true;
+  const out = document.getElementById('output');
+
+  out.addEventListener('scroll', () => {
+    const { scrollTop, scrollHeight, clientHeight } = out;
+    autoScroll = (scrollHeight - scrollTop - clientHeight) < 60;
+  });
+
+  function scrollToBottom() {
+    out.scrollTop = out.scrollHeight;
+    autoScroll = true;
+  }
+
+  // ── Status ───────────────────────────────────────────────────────────────────
+  function setStatus(state, text) {
+    const bar  = document.getElementById('statusBar');
+    const dot  = document.getElementById('statusDot');
+    const span = document.getElementById('statusText');
+
+    bar.className  = 'status-bar ' + state;
+    dot.className  = 'dot ' + ({ running: 'pulse', done: 'done', error: 'error' }[state] || '');
+    span.textContent = text;
+  }
+
+  // ── Colorizar líneas ─────────────────────────────────────────────────────────
+  function colorClass(text) {
+    if (text.includes('SCALPING'))           return 'line-scalp';
+    if (text.includes('COMPRAR'))            return 'line-buy';
+    if (text.includes('EVITAR'))             return 'line-avoid';
+    if (text.includes('═') || text.includes('╔') || text.includes('╚')) return 'line-header';
+    if (text.includes('QUIEN GANA') || text.includes('🏆')) return 'line-winner';
+    return '';
+  }
+
+  function appendLine(text) {
+    const cls = colorClass(text);
+    if (cls) {
+      const span = document.createElement('span');
+      span.className = cls;
+      span.textContent = text + '\n';
+      out.appendChild(span);
+    } else {
+      out.appendChild(document.createTextNode(text + '\n'));
+    }
+    if (autoScroll) scrollToBottom();
+  }
+
+  // ── Run Analysis ─────────────────────────────────────────────────────────────
+  function runAnalysis() {
+    const btn = document.getElementById('runBtn');
+    btn.disabled = true;
+    btn.textContent = '⏳ Analizando...';
+    out.innerHTML = '';
+    autoScroll = true;
+    setStatus('running', 'Análisis en progreso — puede tardar varios minutos...');
+
+    fetch('/run', { method: 'POST' })
+      .then(r => r.json())
+      .then(data => {
+        if (data.error) {
+          setStatus('error', 'Error: ' + data.error);
+          resetBtn(btn);
+          return;
+        }
+
+        const es = new EventSource('/stream');
+
+        es.onmessage = (e) => {
+          const msg = JSON.parse(e.data);
+          if (msg.done) {
+            es.close();
+            resetBtn(btn);
+            if (msg.completed) {
+              setStatus('done', '✅ Análisis completado — ' + new Date().toLocaleTimeString('es-ES'));
+            } else {
+              setStatus('error', '⚠️  Terminado con errores — revisa el output');
+            }
+          } else if (msg.line) {
+            appendLine(msg.line);
+          }
+        };
+
+        es.onerror = () => {
+          es.close();
+          resetBtn(btn);
+          setStatus('error', 'Error de conexión SSE');
+        };
+      })
+      .catch(err => {
+        resetBtn(btn);
+        setStatus('error', 'Error: ' + err.message);
+      });
+  }
+
+  function resetBtn(btn) {
+    btn.disabled = false;
+    btn.textContent = '🚀 Run Analysis';
+  }
+</script>
+
+</body>
+</html>
