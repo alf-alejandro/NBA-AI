@@ -1,10 +1,12 @@
 """
 ╔══════════════════════════════════════════════════════════════╗
-║          NBA EDGE ALPHA BOT  v3.1                           ║
+║          NBA EDGE ALPHA BOT  v3.2                           ║
 ║  Detecta oportunidades de valor en Polymarket NBA           ║
 ║                                                              ║
 ║  FÓRMULA NEA (NBA Edge Alpha):                              ║
-║  NEA = P_Poly - [0.45·P_Vegas + 0.40·N + 0.10·V + 0.05·R] ║
+║  valor_raw  = 0.55·P_Vegas + 0.30·N_norm + 0.10·R + (±5V) ║
+║  valor_real = normalizado a 100 entre ambos equipos         ║
+║  NEA        = P_Poly - valor_real                           ║
 ║                                                              ║
 ║  RESUMEN FINAL:                                             ║
 ║  🎰 SCALPING  : NEA ≤ -20 y valor_real ≥ 40               ║
@@ -353,9 +355,10 @@ def imprimir_analisis(item: dict, analisis: dict,
             n       = analisis["n_visitante"]
             r       = analisis["r_visitante"]
 
-        n_norm     = (n + 100) / 2
-        valor_real = 0.45 * p_vegas + 0.40 * n_norm + 0.10 * v_factor + 0.05 * r
-        nea        = p_poly_pct - valor_real
+        n_norm    = (n + 100) / 2
+        # Fix 2+3: pesos redistribuidos; V_factor (±5) se aplica como aditivo directo
+        valor_raw = 0.55 * p_vegas + 0.30 * n_norm + 0.10 * r + v_factor
+        nea       = p_poly_pct - valor_raw   # provisional, se recalcula tras normalizar
 
         equipos_calc.append({
             "outcome":    outcome,
@@ -367,7 +370,8 @@ def imprimir_analisis(item: dict, analisis: dict,
             "n_norm":     n_norm,
             "v_factor":   v_factor,
             "r":          r,
-            "valor_real": valor_real,
+            "valor_raw":  valor_raw,
+            "valor_real": valor_raw,   # se normalizará a continuación
             "nea":        nea,
             "hora":       hora,
             "partido":    titulo,
@@ -376,6 +380,14 @@ def imprimir_analisis(item: dict, analisis: dict,
     if not equipos_calc:
         print("  ⚠️  Sin precios disponibles")
         return oportunidades, quien_gana
+
+    # ── Fix 1: Normalizar valor_real a 100 (mercado binario) ──────────────────
+    if len(equipos_calc) == 2:
+        total_vr = sum(ec["valor_raw"] for ec in equipos_calc)
+        if total_vr > 0:
+            for ec in equipos_calc:
+                ec["valor_real"] = ec["valor_raw"] / total_vr * 100
+                ec["nea"] = ec["p_poly_pct"] - ec["valor_real"]
 
     # ── Pasada 2: imprimir cada equipo ────────────────────────────────────────
     for ec in equipos_calc:
@@ -468,7 +480,7 @@ def imprimir_analisis(item: dict, analisis: dict,
 
 def main():
     print("\n" + "╔" + "═"*66 + "╗")
-    print("║" + "  🏀  NBA EDGE ALPHA BOT  v3.1  —  Detector de Oportunidades  ".center(66) + "║")
+    print("║" + "  🏀  NBA EDGE ALPHA BOT  v3.2  —  Detector de Oportunidades  ".center(66) + "║")
     print("╚" + "═"*66 + "╝")
     print(f"\n  Fecha: {date.today()}")
     print(f"  Scalping : NEA ≤ -{SCALP_UMBRAL} y valor_real ≥ {SCALP_REAL}¢")
