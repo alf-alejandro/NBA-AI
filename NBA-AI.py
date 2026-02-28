@@ -1,10 +1,11 @@
 """
 ╔══════════════════════════════════════════════════════════════╗
-║          NBA EDGE ALPHA BOT  v3.2                           ║
+║          NBA EDGE ALPHA BOT  v3.3                           ║
 ║  Detecta oportunidades de valor en Polymarket NBA           ║
 ║                                                              ║
 ║  FÓRMULA NEA (NBA Edge Alpha):                              ║
 ║  valor_raw  = 0.55·P_Vegas + 0.30·N_norm + 0.10·R + (±5V) ║
+║  penalización estrellas: -10% si >2 fuera, -15% si ≥4     ║
 ║  valor_real = normalizado a 100 entre ambos equipos         ║
 ║  NEA        = P_Poly - valor_real                           ║
 ║                                                              ║
@@ -178,12 +179,14 @@ Usando búsqueda web, encuentra y responde EXACTAMENTE en este formato JSON (sin
   "n_visitante": <número -100 a 100, factor noticias equipo visitante>,
   "r_local": <número 0-100, racha equipo local últimos 5 partidos: 5 victorias=100, 0 victorias=0>,
   "r_visitante": <número 0-100, racha equipo visitante últimos 5 partidos>,
+  "estrellas_bajas_local": <entero 0-5, número de jugadores All-Star o >18 PPG ausentes HOY en el equipo local>,
+  "estrellas_bajas_visitante": <entero 0-5, número de jugadores All-Star o >18 PPG ausentes HOY en el equipo visitante>,
   "resumen": "<2 oraciones: estado actual de ambos equipos, lesiones importantes y contexto del partido>"
 }}
 
 Busca específicamente:
 1. Odds actuales de casas como DraftKings, FanDuel o BetMGM para {equipo_local} vs {equipo_visitante}
-2. Lesiones o ausencias confirmadas para HOY
+2. Lesiones o ausencias confirmadas para HOY — en especial jugadores All-Star o con >18 PPG de promedio
 3. Resultados de los últimos 5 partidos de cada equipo
 
 Responde SOLO el JSON."""
@@ -206,12 +209,14 @@ Responde SOLO el JSON."""
         if match:
             data = json.loads(match.group())
             return {
-                "p_vegas":      float(data.get("p_vegas", 50)),
-                "n_local":      float(data.get("n_local", 0)),
-                "n_visitante":  float(data.get("n_visitante", 0)),
-                "r_local":      float(data.get("r_local", 50)),
-                "r_visitante":  float(data.get("r_visitante", 50)),
-                "resumen":      data.get("resumen", "Sin información disponible."),
+                "p_vegas":                  float(data.get("p_vegas", 50)),
+                "n_local":                  float(data.get("n_local", 0)),
+                "n_visitante":              float(data.get("n_visitante", 0)),
+                "r_local":                  float(data.get("r_local", 50)),
+                "r_visitante":              float(data.get("r_visitante", 50)),
+                "estrellas_bajas_local":    int(data.get("estrellas_bajas_local", 0)),
+                "estrellas_bajas_visitante": int(data.get("estrellas_bajas_visitante", 0)),
+                "resumen":                  data.get("resumen", "Sin información disponible."),
             }
     except Exception as e:
         print(f"    ⚠️  Error Gemini (run): {e}")
@@ -239,8 +244,12 @@ def analizar_partido_con_gemini(equipo_local: str, equipo_visitante: str,
         return _valores_defecto(linea_ml_local)
 
     # Promediar todos los valores numéricos entre los runs
-    campos = ["p_vegas", "n_local", "n_visitante", "r_local", "r_visitante"]
+    campos = ["p_vegas", "n_local", "n_visitante", "r_local", "r_visitante",
+              "estrellas_bajas_local", "estrellas_bajas_visitante"]
     promedio = {c: sum(r[c] for r in resultados) / len(resultados) for c in campos}
+    # Redondear conteos de estrellas al entero más cercano
+    promedio["estrellas_bajas_local"]     = round(promedio["estrellas_bajas_local"])
+    promedio["estrellas_bajas_visitante"] = round(promedio["estrellas_bajas_visitante"])
     promedio["resumen"] = resultados[-1]["resumen"]   # resumen del último run
 
     # Mostrar valores individuales si hubo más de un run (para detectar outliers)
@@ -257,12 +266,14 @@ def analizar_partido_con_gemini(equipo_local: str, equipo_visitante: str,
 
 def _valores_defecto(linea_ml_local: float) -> dict:
     return {
-        "p_vegas":     linea_ml_local * 100,
-        "n_local":     0.0,
-        "n_visitante": 0.0,
-        "r_local":     50.0,
-        "r_visitante": 50.0,
-        "resumen":     "Análisis no disponible.",
+        "p_vegas":                  linea_ml_local * 100,
+        "n_local":                  0.0,
+        "n_visitante":              0.0,
+        "r_local":                  50.0,
+        "r_visitante":              50.0,
+        "estrellas_bajas_local":    0,
+        "estrellas_bajas_visitante": 0,
+        "resumen":                  "Análisis no disponible.",
     }
 
 
@@ -347,34 +358,49 @@ def imprimir_analisis(item: dict, analisis: dict,
         v_factor = 5.0 if es_local else -5.0
 
         if es_local:
-            p_vegas = analisis["p_vegas"]
-            n       = analisis["n_local"]
-            r       = analisis["r_local"]
+            p_vegas          = analisis["p_vegas"]
+            n                = analisis["n_local"]
+            r                = analisis["r_local"]
+            estrellas_bajas  = analisis["estrellas_bajas_local"]
         else:
-            p_vegas = 100 - analisis["p_vegas"]
-            n       = analisis["n_visitante"]
-            r       = analisis["r_visitante"]
+            p_vegas          = 100 - analisis["p_vegas"]
+            n                = analisis["n_visitante"]
+            r                = analisis["r_visitante"]
+            estrellas_bajas  = analisis["estrellas_bajas_visitante"]
 
         n_norm    = (n + 100) / 2
         # Fix 2+3: pesos redistribuidos; V_factor (±5) se aplica como aditivo directo
         valor_raw = 0.55 * p_vegas + 0.30 * n_norm + 0.10 * r + v_factor
-        nea       = p_poly_pct - valor_raw   # provisional, se recalcula tras normalizar
+
+        # Penalización por estrellas ausentes (independiente de racha y localía)
+        # >2 estrellas (All-Star / >18 PPG) fuera → -10%; ≥4 fuera → -15%
+        if estrellas_bajas == 3:
+            penalty_pct = 0.10
+        elif estrellas_bajas >= 4:
+            penalty_pct = 0.15
+        else:
+            penalty_pct = 0.0
+        valor_raw *= (1 - penalty_pct)
+
+        nea = p_poly_pct - valor_raw   # provisional, se recalcula tras normalizar
 
         equipos_calc.append({
-            "outcome":    outcome,
-            "token_id":   token_id,
-            "es_local":   es_local,
-            "p_poly_pct": p_poly_pct,
-            "p_vegas":    p_vegas,
-            "n":          n,
-            "n_norm":     n_norm,
-            "v_factor":   v_factor,
-            "r":          r,
-            "valor_raw":  valor_raw,
-            "valor_real": valor_raw,   # se normalizará a continuación
-            "nea":        nea,
-            "hora":       hora,
-            "partido":    titulo,
+            "outcome":         outcome,
+            "token_id":        token_id,
+            "es_local":        es_local,
+            "p_poly_pct":      p_poly_pct,
+            "p_vegas":         p_vegas,
+            "n":               n,
+            "n_norm":          n_norm,
+            "v_factor":        v_factor,
+            "r":               r,
+            "estrellas_bajas": estrellas_bajas,
+            "penalty_pct":     penalty_pct,
+            "valor_raw":       valor_raw,
+            "valor_real":      valor_raw,   # se normalizará a continuación
+            "nea":             nea,
+            "hora":            hora,
+            "partido":         titulo,
         })
 
     if not equipos_calc:
@@ -404,6 +430,10 @@ def imprimir_analisis(item: dict, analisis: dict,
         print(f"     Noticias: {ec['n']:+5.1f}  (norm: {ec['n_norm']:.1f})")
         print(f"     Localía : {ec['v_factor']:+5.1f}")
         print(f"     Racha   : {ec['r']:5.1f}  {barra(ec['r'])}")
+        if ec["estrellas_bajas"] > 0:
+            penalty_str = (f"  ⚠️  penalización -{ec['penalty_pct']*100:.0f}% aplicada"
+                           if ec["penalty_pct"] > 0 else "")
+            print(f"     Estrellas fuera: {ec['estrellas_bajas']}{penalty_str}")
         print(f"     {'─'*50}")
         print(f"     Valor Real: {ec['valor_real']:.1f}¢")
         print(f"     NEA = {ec['p_poly_pct']:.1f} - {ec['valor_real']:.1f} = {ec['nea']:+.1f}")
@@ -480,7 +510,7 @@ def imprimir_analisis(item: dict, analisis: dict,
 
 def main():
     print("\n" + "╔" + "═"*66 + "╗")
-    print("║" + "  🏀  NBA EDGE ALPHA BOT  v3.2  —  Detector de Oportunidades  ".center(66) + "║")
+    print("║" + "  🏀  NBA EDGE ALPHA BOT  v3.3  —  Detector de Oportunidades  ".center(66) + "║")
     print("╚" + "═"*66 + "╝")
     print(f"\n  Fecha: {date.today()}")
     print(f"  Scalping : NEA ≤ -{SCALP_UMBRAL} y valor_real ≥ {SCALP_REAL}¢")
@@ -530,7 +560,9 @@ def main():
               f"N_local={analisis['n_local']:+.1f}  "
               f"N_visit={analisis['n_visitante']:+.1f}  "
               f"R_local={analisis['r_local']:.1f}  "
-              f"R_visit={analisis['r_visitante']:.1f}")
+              f"R_visit={analisis['r_visitante']:.1f}  "
+              f"Stars_local={analisis['estrellas_bajas_local']}  "
+              f"Stars_visit={analisis['estrellas_bajas_visitante']}")
 
     # ── 4. Calcular NEA y mostrar análisis ────────────────────────────────────
     print(f"\n📊 [4/4] Calculando NBA Edge Alpha (NEA)...\n")
