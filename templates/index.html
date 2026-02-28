@@ -363,6 +363,7 @@
     <div class="badge">📅 Fecha: <span id="dateLabel"></span></div>
     <div class="badge">🔢 Fórmula: <span>NEA = P_Poly − Valor_Real</span></div>
     <button id="runBtn" onclick="runAnalysis()">🚀 Run Analysis</button>
+    <button id="calcBtn" onclick="loadCalculadora(true)" style="background:#1e3a6a;color:#a78bfa;border:1px solid #a78bfa44;border-radius:8px;padding:11px 20px;font-size:0.9rem;font-weight:700;cursor:pointer;">💼 Calculadora</button>
   </div>
 
   <div class="status-bar" id="statusBar">
@@ -502,7 +503,7 @@
             resetBtn(btn);
             if (msg.completed) {
               setStatus('done', '✅ Análisis completado — ' + new Date().toLocaleTimeString('es-ES'));
-              loadCalculadora();
+              loadCalculadora(true);
             } else {
               setStatus('error', '⚠️  Terminado con errores — revisa el output');
             }
@@ -543,7 +544,8 @@
     return n.toFixed(1) + '%';
   }
 
-  function loadCalculadora() {
+  // scroll=true → hace scroll hasta la calculadora al abrirla
+  function loadCalculadora(scroll) {
     fetch('/resultados')
       .then(r => {
         if (!r.ok) throw new Error('Sin resultados');
@@ -552,15 +554,21 @@
       .then(data => {
         _candidatos = data.candidatos || [];
         document.getElementById('calcFecha').textContent = '📅 ' + (data.fecha || '');
-        document.getElementById('calcSection').style.display = 'block';
-        // Si hay valor guardado, recalcular automáticamente
+        const sec = document.getElementById('calcSection');
+        sec.style.display = 'block';
+        // Si hay valor ingresado, recalcular automáticamente
         const inp = document.getElementById('portfolioInput');
         if (inp.value) calcular();
+        // Scroll hasta la calculadora
+        if (scroll) setTimeout(() => sec.scrollIntoView({ behavior: 'smooth', block: 'start' }), 80);
       })
       .catch(() => {
-        // Sin resultados todavía — no mostrar la sección
+        if (scroll) alert('Sin resultados disponibles. Ejecuta el análisis primero.');
       });
   }
+
+  // Intentar cargar la calculadora al abrir la página (si ya hay resultados del día)
+  window.addEventListener('load', () => loadCalculadora(false));
 
   function calcular() {
     const raw = document.getElementById('portfolioInput').value;
