@@ -1,6 +1,6 @@
 """
 ╔══════════════════════════════════════════════════════════════╗
-║          NBA EDGE ALPHA BOT  v3.4                           ║
+║          NBA EDGE ALPHA BOT  v3.5                           ║
 ║  Detecta oportunidades de valor en Polymarket NBA           ║
 ║                                                              ║
 ║  FÓRMULA NEA (NBA Edge Alpha):                              ║
@@ -39,6 +39,7 @@ def _cargar_env():
                 os.environ[key] = value
 
 _cargar_env()
+import sys
 import json
 import requests
 from datetime import datetime, date, timedelta
@@ -518,76 +519,115 @@ def _barra_dinero(monto: float, total: float, largo: int = 24) -> str:
     return "█" * lleno + "░" * (largo - lleno)
 
 
+def _pedir_portfolio() -> float | None:
+    """
+    Lee el portafolio desde (en orden de prioridad):
+      1. Argumento CLI:          python NBA-AI.py 1000
+      2. Variable de entorno:    PORTFOLIO=1000
+      3. Input interactivo       (solo si hay terminal, no falla en Railway)
+    """
+    # 1. Argumento CLI
+    if len(sys.argv) > 1:
+        try:
+            v = float(sys.argv[1].replace(",", "").replace("$", ""))
+            if v > 0:
+                print(f"  Portafolio (arg CLI): ${v:,.2f}")
+                return v
+        except ValueError:
+            pass
+
+    # 2. Variable de entorno
+    env_val = os.environ.get("PORTFOLIO", "").strip()
+    if env_val:
+        try:
+            v = float(env_val.replace(",", "").replace("$", ""))
+            if v > 0:
+                print(f"  Portafolio (env PORTFOLIO): ${v:,.2f}")
+                return v
+        except ValueError:
+            pass
+
+    # 3. Input interactivo (terminal local)
+    try:
+        raw = input("  Ingresa tu portafolio total ($): ").strip()
+        raw = raw.replace(",", "").replace("$", "").replace(" ", "")
+        v = float(raw)
+        if v > 0:
+            return v
+        print("  El valor debe ser mayor a 0.")
+    except (ValueError, EOFError):
+        pass
+
+    return None
+
+
 def calculadora_portafolio(todos_quienes: list[dict]) -> None:
     """
-    Calculadora interactiva de gestión de portafolio.
+    Calculadora de gestión de portafolio — Opción A (proporcional al gap).
 
-    Candidatos: favoritos de 'quien gana' con NEA < 0 (precio Poly < valor real).
-    Distribución: proporcional al edge de cada candidato dentro del 67% disponible.
-    Cap duro: ninguna apuesta puede superar el 34% del portafolio total.
+    Candidatos : TODOS los favoritos de 'quien gana' (gap ≥ REAL_GAP_MIN).
+    Peso       : gap entre valor_real de ambos equipos — mayor gap = más
+                 confianza en la victoria = mayor porción del capital.
+    Edge       : valor_real - precio_poly, solo informativo (✅ si > 0).
+    Distribución: 67% disponible repartido proporcionalmente al gap.
+    Cap duro   : 34% del portafolio por apuesta.
     """
-    # ── Filtrar candidatos con edge positivo ──────────────────────────────────
+    # ── Construir candidatos (todos los favoritos, sin filtro de edge) ────────
     candidatos = []
     for qg in todos_quienes:
-        edge = qg["favorito_real"] - qg["favorito_poly"]   # = -NEA
-        if edge > 0:
-            candidatos.append({
-                "equipo":  qg["favorito"],
-                "partido": qg["partido"],
-                "hora":    qg["hora"],
-                "real":    qg["favorito_real"],
-                "poly":    qg["favorito_poly"],
-                "nea":     qg["favorito_nea"],
-                "gap":     qg["gap"],
-                "edge":    edge,
-            })
-    # Ordenar de mayor a menor edge
-    candidatos.sort(key=lambda x: x["edge"], reverse=True)
+        edge = qg["favorito_real"] - qg["favorito_poly"]   # informativo
+        candidatos.append({
+            "equipo":  qg["favorito"],
+            "partido": qg["partido"],
+            "hora":    qg["hora"],
+            "real":    qg["favorito_real"],
+            "poly":    qg["favorito_poly"],
+            "nea":     qg["favorito_nea"],
+            "gap":     qg["gap"],    # peso de distribución
+            "edge":    edge,         # solo informativo
+        })
+    candidatos.sort(key=lambda x: x["gap"], reverse=True)
 
     print(f"\n\n{'═'*68}")
     print(f"  💼  CALCULADORA DE PORTAFOLIO")
-    print(f"  Distribución proporcional al edge  |  Reserva {RESERVA_PCT*100:.0f}%  |  Cap {CAP_BET_PCT*100:.0f}% por apuesta")
+    print(f"  Peso = gap entre equipos  |  Reserva {RESERVA_PCT*100:.0f}%  |  Cap {CAP_BET_PCT*100:.0f}% por apuesta")
     print(f"{'═'*68}")
 
     if not candidatos:
-        print(f"\n  Sin apuestas recomendadas hoy.")
-        print(f"  (Ningún favorito tiene precio inferior a su valor real en Polymarket)")
+        print(f"\n  Sin partidos con gap suficiente hoy ({REAL_GAP_MIN}¢ mínimo).")
         print(f"{'═'*68}\n")
         return
 
-    # ── Mostrar candidatos calificados ────────────────────────────────────────
-    print(f"\n  Equipos calificados  (favorito con edge positivo sobre Poly):\n")
+    # ── Mostrar candidatos ────────────────────────────────────────────────────
+    print(f"\n  Favoritos calificados:\n")
     for c in candidatos:
+        edge_tag = f"  edge +{c['edge']:.1f} ✅" if c["edge"] > 0 else f"  edge {c['edge']:.1f}"
         print(f"    ▶  {c['equipo']:<24} "
               f"Real {c['real']:5.1f}¢  Poly {c['poly']:5.1f}¢  "
-              f"Edge +{c['edge']:.1f}¢  NEA {c['nea']:+.1f}")
+              f"Gap {c['gap']:.1f}{edge_tag}")
 
-    # ── Input de portafolio ───────────────────────────────────────────────────
+    # ── Leer portafolio ───────────────────────────────────────────────────────
     print()
-    while True:
-        try:
-            raw = input("  Ingresa tu portafolio total ($): ").strip()
-            raw = raw.replace(",", "").replace("$", "").replace(" ", "")
-            portfolio = float(raw)
-            if portfolio <= 0:
-                print("  El valor debe ser mayor a 0. Intenta de nuevo.")
-                continue
-            break
-        except ValueError:
-            print("  Ingresa un número válido (ej: 500 o 1000.50).")
+    portfolio = _pedir_portfolio()
+    if portfolio is None:
+        print("  No se pudo obtener el portafolio. "
+              "Pásalo como argumento (python NBA-AI.py 1000) "
+              "o variable de entorno PORTFOLIO=1000.")
+        print(f"{'═'*68}\n")
+        return
 
     reserva    = portfolio * RESERVA_PCT
     disponible = portfolio * (1 - RESERVA_PCT)
 
-    # ── Calcular apuestas proporcionales al edge ──────────────────────────────
-    total_edge = sum(c["edge"] for c in candidatos)
-    apuestas   = []
+    # ── Calcular apuestas proporcionales al gap ───────────────────────────────
+    total_gap = sum(c["gap"] for c in candidatos)
+    apuestas  = []
     for c in candidatos:
-        peso       = c["edge"] / total_edge
-        monto_raw  = disponible * peso
-        monto_cap  = portfolio * CAP_BET_PCT
-        capeado    = monto_raw > monto_cap
-        monto      = monto_cap if capeado else monto_raw
+        peso      = c["gap"] / total_gap
+        monto_raw = disponible * peso
+        monto_cap = portfolio * CAP_BET_PCT
+        capeado   = monto_raw > monto_cap
+        monto     = monto_cap if capeado else monto_raw
         apuestas.append({
             **c,
             "peso":     peso,
@@ -596,8 +636,8 @@ def calculadora_portafolio(todos_quienes: list[dict]) -> None:
             "capeado":  capeado,
         })
 
-    total_apostado  = sum(a["monto"] for a in apuestas)
-    sin_asignar     = portfolio - reserva - total_apostado
+    total_apostado = sum(a["monto"] for a in apuestas)
+    sin_asignar    = portfolio - reserva - total_apostado
 
     # ── Imprimir resultados ───────────────────────────────────────────────────
     print(f"\n  {'─'*66}")
@@ -608,14 +648,13 @@ def calculadora_portafolio(todos_quienes: list[dict]) -> None:
     print(f"  APUESTAS SUGERIDAS:\n")
 
     for a in apuestas:
-        cap_tag = "  ← capeado al 34%" if a["capeado"] else ""
+        cap_tag  = "  ← capeado al 34%" if a["capeado"] else ""
+        edge_tag = f"+{a['edge']:.1f} ✅" if a["edge"] > 0 else f"{a['edge']:.1f}"
         print(f"  ▶  {a['equipo']}")
         print(f"     {a['partido']}  |  {a['hora']}")
-        print(f"     Edge +{a['edge']:.1f}¢  ({a['peso']*100:.0f}% del edge total)")
-        print(f"     Apuesta : ${a['monto']:>9,.2f}  "
-              f"({a['pct_port']:.1f}% del portafolio){cap_tag}")
-        print(f"     {'░'*4}{_barra_dinero(a['monto'], portfolio, 36)}  "
-              f"${a['monto']:,.2f} / ${portfolio:,.2f}")
+        print(f"     Gap {a['gap']:.1f}¢ ({a['peso']*100:.0f}% del peso)  |  Edge {edge_tag}¢")
+        print(f"     Apuesta : ${a['monto']:>9,.2f}  ({a['pct_port']:.1f}% del portafolio){cap_tag}")
+        print(f"     {_barra_dinero(a['monto'], portfolio, 40)}  ${a['monto']:,.2f}")
         print()
 
     print(f"  {'─'*66}")
@@ -635,7 +674,7 @@ def calculadora_portafolio(todos_quienes: list[dict]) -> None:
 
 def main():
     print("\n" + "╔" + "═"*66 + "╗")
-    print("║" + "  🏀  NBA EDGE ALPHA BOT  v3.4  —  Detector de Oportunidades  ".center(66) + "║")
+    print("║" + "  🏀  NBA EDGE ALPHA BOT  v3.5  —  Detector de Oportunidades".center(66) + "║")
     print("╚" + "═"*66 + "╝")
     print(f"\n  Fecha: {date.today()}")
     print(f"  Scalping : NEA ≤ -{SCALP_UMBRAL} y valor_real ≥ {SCALP_REAL}¢")
