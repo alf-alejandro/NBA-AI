@@ -116,6 +116,15 @@ def stream():
     )
 
 
+@app.route("/resultados")
+def resultados():
+    path = os.path.join(os.path.dirname(__file__), "resultados.json")
+    if not os.path.exists(path):
+        return jsonify({"error": "Sin resultados. Ejecuta el análisis primero."}), 404
+    with open(path, encoding="utf-8") as f:
+        return jsonify(json.load(f))
+
+
 @app.route("/status")
 def status():
     with _lock:

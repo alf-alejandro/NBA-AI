@@ -39,7 +39,6 @@ def _cargar_env():
                 os.environ[key] = value
 
 _cargar_env()
-import sys
 import json
 import requests
 from datetime import datetime, date, timedelta
@@ -506,166 +505,33 @@ def imprimir_analisis(item: dict, analisis: dict,
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# MÓDULO 5 — CALCULADORA DE PORTAFOLIO  (Opción A: proporcional al edge)
+# MÓDULO 5 — GUARDAR RESULTADOS PARA LA CALCULADORA WEB
 # ══════════════════════════════════════════════════════════════════════════════
 
-RESERVA_PCT  = 0.33   # porcentaje fijo en reserva intocable
-CAP_BET_PCT  = 0.34   # máximo por apuesta individual como % del portafolio
-
-
-def _barra_dinero(monto: float, total: float, largo: int = 24) -> str:
-    ratio = max(0.0, min(1.0, monto / total))
-    lleno = int(ratio * largo)
-    return "█" * lleno + "░" * (largo - lleno)
-
-
-def _pedir_portfolio() -> float | None:
+def guardar_resultados(todos_quienes: list[dict]) -> None:
     """
-    Lee el portafolio desde (en orden de prioridad):
-      1. Argumento CLI:          python NBA-AI.py 1000
-      2. Variable de entorno:    PORTFOLIO=1000
-      3. Input interactivo       (solo si hay terminal, no falla en Railway)
+    Serializa los favoritos de 'quien gana' en resultados.json.
+    La calculadora web (app.py / index.html) lee este archivo.
     """
-    # 1. Argumento CLI
-    if len(sys.argv) > 1:
-        try:
-            v = float(sys.argv[1].replace(",", "").replace("$", ""))
-            if v > 0:
-                print(f"  Portafolio (arg CLI): ${v:,.2f}")
-                return v
-        except ValueError:
-            pass
-
-    # 2. Variable de entorno
-    env_val = os.environ.get("PORTFOLIO", "").strip()
-    if env_val:
-        try:
-            v = float(env_val.replace(",", "").replace("$", ""))
-            if v > 0:
-                print(f"  Portafolio (env PORTFOLIO): ${v:,.2f}")
-                return v
-        except ValueError:
-            pass
-
-    # 3. Input interactivo (terminal local)
-    try:
-        raw = input("  Ingresa tu portafolio total ($): ").strip()
-        raw = raw.replace(",", "").replace("$", "").replace(" ", "")
-        v = float(raw)
-        if v > 0:
-            return v
-        print("  El valor debe ser mayor a 0.")
-    except (ValueError, EOFError):
-        pass
-
-    return None
-
-
-def calculadora_portafolio(todos_quienes: list[dict]) -> None:
-    """
-    Calculadora de gestión de portafolio — Opción A (proporcional al gap).
-
-    Candidatos : TODOS los favoritos de 'quien gana' (gap ≥ REAL_GAP_MIN).
-    Peso       : gap entre valor_real de ambos equipos — mayor gap = más
-                 confianza en la victoria = mayor porción del capital.
-    Edge       : valor_real - precio_poly, solo informativo (✅ si > 0).
-    Distribución: 67% disponible repartido proporcionalmente al gap.
-    Cap duro   : 34% del portafolio por apuesta.
-    """
-    # ── Construir candidatos (todos los favoritos, sin filtro de edge) ────────
     candidatos = []
     for qg in todos_quienes:
-        edge = qg["favorito_real"] - qg["favorito_poly"]   # informativo
         candidatos.append({
             "equipo":  qg["favorito"],
             "partido": qg["partido"],
             "hora":    qg["hora"],
-            "real":    qg["favorito_real"],
-            "poly":    qg["favorito_poly"],
-            "nea":     qg["favorito_nea"],
-            "gap":     qg["gap"],    # peso de distribución
-            "edge":    edge,         # solo informativo
+            "real":    round(qg["favorito_real"], 1),
+            "poly":    round(qg["favorito_poly"], 1),
+            "nea":     round(qg["favorito_nea"],  1),
+            "gap":     round(qg["gap"],            1),
+            "edge":    round(qg["favorito_real"] - qg["favorito_poly"], 1),
         })
     candidatos.sort(key=lambda x: x["gap"], reverse=True)
 
-    print(f"\n\n{'═'*68}")
-    print(f"  💼  CALCULADORA DE PORTAFOLIO")
-    print(f"  Peso = gap entre equipos  |  Reserva {RESERVA_PCT*100:.0f}%  |  Cap {CAP_BET_PCT*100:.0f}% por apuesta")
-    print(f"{'═'*68}")
-
-    if not candidatos:
-        print(f"\n  Sin partidos con gap suficiente hoy ({REAL_GAP_MIN}¢ mínimo).")
-        print(f"{'═'*68}\n")
-        return
-
-    # ── Mostrar candidatos ────────────────────────────────────────────────────
-    print(f"\n  Favoritos calificados:\n")
-    for c in candidatos:
-        edge_tag = f"  edge +{c['edge']:.1f} ✅" if c["edge"] > 0 else f"  edge {c['edge']:.1f}"
-        print(f"    ▶  {c['equipo']:<24} "
-              f"Real {c['real']:5.1f}¢  Poly {c['poly']:5.1f}¢  "
-              f"Gap {c['gap']:.1f}{edge_tag}")
-
-    # ── Leer portafolio ───────────────────────────────────────────────────────
-    print()
-    portfolio = _pedir_portfolio()
-    if portfolio is None:
-        print("  No se pudo obtener el portafolio. "
-              "Pásalo como argumento (python NBA-AI.py 1000) "
-              "o variable de entorno PORTFOLIO=1000.")
-        print(f"{'═'*68}\n")
-        return
-
-    reserva    = portfolio * RESERVA_PCT
-    disponible = portfolio * (1 - RESERVA_PCT)
-
-    # ── Calcular apuestas proporcionales al gap ───────────────────────────────
-    total_gap = sum(c["gap"] for c in candidatos)
-    apuestas  = []
-    for c in candidatos:
-        peso      = c["gap"] / total_gap
-        monto_raw = disponible * peso
-        monto_cap = portfolio * CAP_BET_PCT
-        capeado   = monto_raw > monto_cap
-        monto     = monto_cap if capeado else monto_raw
-        apuestas.append({
-            **c,
-            "peso":     peso,
-            "monto":    monto,
-            "pct_port": monto / portfolio * 100,
-            "capeado":  capeado,
-        })
-
-    total_apostado = sum(a["monto"] for a in apuestas)
-    sin_asignar    = portfolio - reserva - total_apostado
-
-    # ── Imprimir resultados ───────────────────────────────────────────────────
-    print(f"\n  {'─'*66}")
-    print(f"  {'Portafolio total':<24}: ${portfolio:>10,.2f}")
-    print(f"  {'Reserva (33%)':<24}: ${reserva:>10,.2f}  {_barra_dinero(reserva, portfolio)}")
-    print(f"  {'Disponible (67%)':<24}: ${disponible:>10,.2f}  {_barra_dinero(disponible, portfolio)}")
-    print(f"  {'─'*66}")
-    print(f"  APUESTAS SUGERIDAS:\n")
-
-    for a in apuestas:
-        cap_tag  = "  ← capeado al 34%" if a["capeado"] else ""
-        edge_tag = f"+{a['edge']:.1f} ✅" if a["edge"] > 0 else f"{a['edge']:.1f}"
-        print(f"  ▶  {a['equipo']}")
-        print(f"     {a['partido']}  |  {a['hora']}")
-        print(f"     Gap {a['gap']:.1f}¢ ({a['peso']*100:.0f}% del peso)  |  Edge {edge_tag}¢")
-        print(f"     Apuesta : ${a['monto']:>9,.2f}  ({a['pct_port']:.1f}% del portafolio){cap_tag}")
-        print(f"     {_barra_dinero(a['monto'], portfolio, 40)}  ${a['monto']:,.2f}")
-        print()
-
-    print(f"  {'─'*66}")
-    print(f"  {'Total apostado':<24}: ${total_apostado:>10,.2f}  ({total_apostado/portfolio*100:.1f}%)")
-    if sin_asignar > 0.01:
-        print(f"  {'Sin asignar (caps)':<24}: ${sin_asignar:>10,.2f}  → suma a reserva")
-    en_reserva_real = portfolio - total_apostado
-    print(f"  {'En reserva efectiva':<24}: ${en_reserva_real:>10,.2f}  ({en_reserva_real/portfolio*100:.1f}%)")
-    print(f"\n{'═'*68}")
-    print(f"  ⚠️  Solo informativo. No constituye consejo financiero.")
-    print(f"{'═'*68}\n")
+    data = {"fecha": str(date.today()), "candidatos": candidatos}
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "resultados.json")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    print(f"\n  💾 resultados.json guardado — {len(candidatos)} favorito(s) para la calculadora")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -791,8 +657,8 @@ def main():
     print(f"  ⚠️  Solo informativo. No constituye consejo financiero.")
     print(f"{'═'*68}")
 
-    # ── Calculadora de portafolio ─────────────────────────────────────────────
-    calculadora_portafolio(todos_quienes)
+    # ── Guardar resultados para la calculadora web ───────────────────────────
+    guardar_resultados(todos_quienes)
 
 
 if __name__ == "__main__":

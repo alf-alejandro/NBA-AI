@@ -154,6 +154,197 @@
     #output::-webkit-scrollbar-track { background: #040b16; }
     #output::-webkit-scrollbar-thumb { background: #1e3a6a; border-radius: 3px; }
     #output::-webkit-scrollbar-thumb:hover { background: #2e5aa8; }
+
+    /* ══════════════════════════════════════════════════════
+       CALCULADORA DE PORTAFOLIO
+    ══════════════════════════════════════════════════════ */
+    #calcSection {
+      display: none;
+      margin-top: 28px;
+    }
+
+    .calc-header-row {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+    .calc-fecha {
+      margin-left: auto;
+      font-size: 0.78rem;
+      color: #6a85a8;
+    }
+
+    /* Input portafolio */
+    .calc-input-wrap {
+      padding: 20px 20px 12px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+      border-bottom: 1px solid #0f1e3a;
+    }
+    .calc-input-wrap label {
+      font-size: 0.9rem;
+      color: #6a85a8;
+      white-space: nowrap;
+    }
+    .portfolio-input {
+      background: #0f1e3a;
+      border: 1px solid #1e3a6a;
+      border-radius: 8px;
+      color: #dce8f8;
+      font-size: 1.1rem;
+      font-weight: 700;
+      padding: 9px 14px;
+      width: 180px;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    .portfolio-input:focus { border-color: #f47c20; }
+    .calc-btn {
+      background: #f47c20;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      padding: 10px 22px;
+      font-size: 0.9rem;
+      font-weight: 700;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .calc-btn:hover { background: #d96310; }
+
+    /* Barras resumen */
+    .calc-summary {
+      padding: 16px 20px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .summary-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-size: 0.85rem;
+    }
+    .summary-label { width: 150px; color: #6a85a8; flex-shrink: 0; }
+    .summary-amount { width: 90px; text-align: right; font-weight: 700; color: #dce8f8; }
+    .summary-pct { width: 46px; text-align: right; font-size: 0.78rem; color: #6a85a8; }
+    .bar-track {
+      flex: 1;
+      height: 8px;
+      background: #0f1e3a;
+      border-radius: 4px;
+      overflow: hidden;
+    }
+    .bar-fill {
+      height: 100%;
+      border-radius: 4px;
+      transition: width 0.4s ease;
+    }
+    .bar-reserva   { background: #6a85a8; }
+    .bar-apostado  { background: #f47c20; }
+    .bar-remanente { background: #1e3a6a; }
+
+    /* Cards de equipos */
+    .cards-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+      gap: 14px;
+      padding: 16px 20px 20px;
+    }
+    .team-card {
+      background: #091629;
+      border: 1px solid #1e3a6a;
+      border-radius: 10px;
+      padding: 16px;
+      border-top: 3px solid #1e3a6a;
+      transition: transform 0.15s;
+    }
+    .team-card:hover { transform: translateY(-2px); }
+    .team-card.edge-pos  { border-top-color: #22c55e; }
+    .team-card.edge-low  { border-top-color: #f59e0b; }
+    .team-card.edge-neg  { border-top-color: #f47c20; }
+
+    .card-team {
+      font-size: 1rem;
+      font-weight: 800;
+      color: #dce8f8;
+      margin-bottom: 4px;
+      letter-spacing: 0.3px;
+    }
+    .card-partido {
+      font-size: 0.72rem;
+      color: #6a85a8;
+      margin-bottom: 12px;
+      line-height: 1.4;
+    }
+    .card-stat-row {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.78rem;
+      color: #6a85a8;
+      margin-bottom: 3px;
+    }
+    .card-stat-row span { color: #b8d0f0; }
+    .card-divider {
+      border: none;
+      border-top: 1px solid #0f1e3a;
+      margin: 10px 0;
+    }
+    .card-amount {
+      font-size: 1.45rem;
+      font-weight: 800;
+      color: #f47c20;
+    }
+    .card-pct {
+      font-size: 0.78rem;
+      color: #6a85a8;
+      margin-top: 2px;
+    }
+    .card-cap-badge {
+      display: inline-block;
+      background: #f47c2022;
+      border: 1px solid #f47c2060;
+      color: #f47c20;
+      font-size: 0.68rem;
+      padding: 1px 6px;
+      border-radius: 4px;
+      margin-top: 4px;
+    }
+    .card-bar-track {
+      margin-top: 10px;
+      height: 5px;
+      background: #0f1e3a;
+      border-radius: 3px;
+      overflow: hidden;
+    }
+    .card-bar-fill {
+      height: 100%;
+      border-radius: 3px;
+      background: #f47c20;
+      transition: width 0.4s ease;
+    }
+
+    /* Totales */
+    .calc-totales {
+      padding: 12px 20px 18px;
+      border-top: 1px solid #0f1e3a;
+      display: flex;
+      gap: 28px;
+      flex-wrap: wrap;
+    }
+    .total-item { font-size: 0.85rem; }
+    .total-label { color: #6a85a8; }
+    .total-val { color: #dce8f8; font-weight: 700; margin-left: 6px; }
+    .total-val.green { color: #22c55e; }
+    .total-disclaimer {
+      margin-top: 8px;
+      width: 100%;
+      font-size: 0.72rem;
+      color: #2a3f60;
+    }
   </style>
 </head>
 <body>
@@ -162,7 +353,7 @@
   <span class="ball">🏀</span>
   <div>
     <h1>NBA Edge Alpha Bot</h1>
-    <div class="sub">v3.1 — Detector de oportunidades de valor en Polymarket NBA</div>
+    <div class="sub">v3.5 — Detector de oportunidades de valor en Polymarket NBA</div>
   </div>
 </header>
 
@@ -170,7 +361,7 @@
 
   <div class="controls">
     <div class="badge">📅 Fecha: <span id="dateLabel"></span></div>
-    <div class="badge">🔢 Fórmula: <span>NEA = P_Poly − [0.45·Vegas + 0.40·N + 0.10·V + 0.05·R]</span></div>
+    <div class="badge">🔢 Fórmula: <span>NEA = P_Poly − Valor_Real</span></div>
     <button id="runBtn" onclick="runAnalysis()">🚀 Run Analysis</button>
   </div>
 
@@ -179,12 +370,53 @@
     <span id="statusText">Listo para analizar</span>
   </div>
 
+  <!-- Log del análisis -->
   <div class="panel">
     <div class="panel-header">
       <span>📊 Output del análisis</span>
       <button class="scroll-btn" onclick="scrollToBottom()">↓ Ir al final</button>
     </div>
     <div id="output"></div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════
+       CALCULADORA DE PORTAFOLIO
+  ══════════════════════════════════════════════════ -->
+  <div id="calcSection">
+    <div class="panel">
+      <div class="panel-header">
+        <div class="calc-header-row" style="width:100%">
+          <span>💼 Calculadora de Portafolio</span>
+          <span style="color:#6a85a8;font-size:0.78rem;">
+            Peso = gap entre equipos &nbsp;|&nbsp; Reserva 33% &nbsp;|&nbsp; Cap 34% por apuesta
+          </span>
+          <span class="calc-fecha" id="calcFecha"></span>
+        </div>
+      </div>
+
+      <!-- Input -->
+      <div class="calc-input-wrap">
+        <label for="portfolioInput">Portafolio total ($)</label>
+        <input
+          type="number"
+          id="portfolioInput"
+          class="portfolio-input"
+          placeholder="1000"
+          min="1"
+          step="1"
+        />
+        <button class="calc-btn" onclick="calcular()">Calcular</button>
+      </div>
+
+      <!-- Barras resumen -->
+      <div class="calc-summary" id="calcSummary" style="display:none"></div>
+
+      <!-- Cards de equipos -->
+      <div class="cards-grid" id="calcCards"></div>
+
+      <!-- Totales -->
+      <div class="calc-totales" id="calcTotales" style="display:none"></div>
+    </div>
   </div>
 
 </div>
@@ -214,7 +446,6 @@
     const bar  = document.getElementById('statusBar');
     const dot  = document.getElementById('statusDot');
     const span = document.getElementById('statusText');
-
     bar.className  = 'status-bar ' + state;
     dot.className  = 'dot ' + ({ running: 'pulse', done: 'done', error: 'error' }[state] || '');
     span.textContent = text;
@@ -222,11 +453,11 @@
 
   // ── Colorizar líneas ─────────────────────────────────────────────────────────
   function colorClass(text) {
-    if (text.includes('SCALPING'))           return 'line-scalp';
-    if (text.includes('COMPRAR'))            return 'line-buy';
-    if (text.includes('EVITAR'))             return 'line-avoid';
-    if (text.includes('═') || text.includes('╔') || text.includes('╚')) return 'line-header';
-    if (text.includes('QUIEN GANA') || text.includes('🏆')) return 'line-winner';
+    if (text.includes('SCALPING'))                                                return 'line-scalp';
+    if (text.includes('COMPRAR'))                                                 return 'line-buy';
+    if (text.includes('EVITAR'))                                                  return 'line-avoid';
+    if (text.includes('═') || text.includes('╔') || text.includes('╚'))          return 'line-header';
+    if (text.includes('QUIEN GANA') || text.includes('🏆'))                       return 'line-winner';
     return '';
   }
 
@@ -250,6 +481,7 @@
     btn.textContent = '⏳ Analizando...';
     out.innerHTML = '';
     autoScroll = true;
+    document.getElementById('calcSection').style.display = 'none';
     setStatus('running', 'Análisis en progreso — puede tardar varios minutos...');
 
     fetch('/run', { method: 'POST' })
@@ -270,6 +502,7 @@
             resetBtn(btn);
             if (msg.completed) {
               setStatus('done', '✅ Análisis completado — ' + new Date().toLocaleTimeString('es-ES'));
+              loadCalculadora();
             } else {
               setStatus('error', '⚠️  Terminado con errores — revisa el output');
             }
@@ -294,6 +527,137 @@
     btn.disabled = false;
     btn.textContent = '🚀 Run Analysis';
   }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // CALCULADORA
+  // ══════════════════════════════════════════════════════════════════════════
+
+  let _candidatos = [];
+  const RESERVA_PCT = 0.33;
+  const CAP_PCT     = 0.34;
+
+  function fmt(n) {
+    return '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+  function pct(n) {
+    return n.toFixed(1) + '%';
+  }
+
+  function loadCalculadora() {
+    fetch('/resultados')
+      .then(r => {
+        if (!r.ok) throw new Error('Sin resultados');
+        return r.json();
+      })
+      .then(data => {
+        _candidatos = data.candidatos || [];
+        document.getElementById('calcFecha').textContent = '📅 ' + (data.fecha || '');
+        document.getElementById('calcSection').style.display = 'block';
+        // Si hay valor guardado, recalcular automáticamente
+        const inp = document.getElementById('portfolioInput');
+        if (inp.value) calcular();
+      })
+      .catch(() => {
+        // Sin resultados todavía — no mostrar la sección
+      });
+  }
+
+  function calcular() {
+    const raw = document.getElementById('portfolioInput').value;
+    const portfolio = parseFloat(raw);
+    if (!portfolio || portfolio <= 0) return;
+    if (_candidatos.length === 0) return;
+
+    const reserva    = portfolio * RESERVA_PCT;
+    const disponible = portfolio * (1 - RESERVA_PCT);
+    const totalGap   = _candidatos.reduce((s, c) => s + c.gap, 0);
+
+    const apuestas = _candidatos.map(c => {
+      const peso      = c.gap / totalGap;
+      const montoRaw  = disponible * peso;
+      const montoCap  = portfolio * CAP_PCT;
+      const capeado   = montoRaw > montoCap;
+      const monto     = capeado ? montoCap : montoRaw;
+      return { ...c, peso, monto, pctPort: monto / portfolio * 100, capeado };
+    });
+
+    const totalApostado = apuestas.reduce((s, a) => s + a.monto, 0);
+    const enReserva     = portfolio - totalApostado;
+
+    renderSummary(portfolio, reserva, disponible, totalApostado);
+    renderCards(apuestas, portfolio);
+    renderTotales(totalApostado, enReserva, portfolio);
+  }
+
+  function renderSummary(portfolio, reserva, disponible, totalApostado) {
+    const el = document.getElementById('calcSummary');
+    const rows = [
+      { label: 'Portafolio total', amount: portfolio, pct: 100,                         fillCls: '',             pctFill: 100 },
+      { label: 'Reserva (33%)',    amount: reserva,   pct: reserva/portfolio*100,        fillCls: 'bar-reserva',  pctFill: reserva/portfolio*100 },
+      { label: 'Total apostado',   amount: totalApostado, pct: totalApostado/portfolio*100, fillCls: 'bar-apostado', pctFill: totalApostado/portfolio*100 },
+    ];
+    el.innerHTML = rows.map(r => `
+      <div class="summary-row">
+        <span class="summary-label">${r.label}</span>
+        <span class="summary-amount">${fmt(r.amount)}</span>
+        <span class="summary-pct">${pct(r.pct)}</span>
+        <div class="bar-track">
+          <div class="bar-fill ${r.fillCls}" style="width:${r.pctFill}%"></div>
+        </div>
+      </div>
+    `).join('');
+    el.style.display = 'flex';
+  }
+
+  function renderCards(apuestas, portfolio) {
+    const el = document.getElementById('calcCards');
+    el.innerHTML = apuestas.map(a => {
+      const edgeCls  = a.edge > 0 ? 'edge-pos' : (a.edge > -5 ? 'edge-low' : 'edge-neg');
+      const edgeTxt  = (a.edge > 0 ? '+' : '') + a.edge.toFixed(1) + '¢' + (a.edge > 0 ? ' ✅' : '');
+      const capBadge = a.capeado ? '<div class="card-cap-badge">capeado 34%</div>' : '';
+      const barW     = Math.min(100, a.pctPort / CAP_PCT / 100 * 100).toFixed(1);
+      return `
+        <div class="team-card ${edgeCls}">
+          <div class="card-team">${a.equipo}</div>
+          <div class="card-partido">${a.partido}<br>${a.hora}</div>
+          <div class="card-stat-row">Gap entre equipos <span>${a.gap.toFixed(1)}¢</span></div>
+          <div class="card-stat-row">Peso del total     <span>${pct(a.peso * 100)}</span></div>
+          <div class="card-stat-row">Real / Poly        <span>${a.real.toFixed(1)} / ${a.poly.toFixed(1)}¢</span></div>
+          <div class="card-stat-row">Edge de precio     <span>${edgeTxt}</span></div>
+          <hr class="card-divider" />
+          <div class="card-amount">${fmt(a.monto)}</div>
+          <div class="card-pct">${pct(a.pctPort)} del portafolio</div>
+          ${capBadge}
+          <div class="card-bar-track">
+            <div class="card-bar-fill" style="width:${a.pctPort / CAP_PCT}%"></div>
+          </div>
+        </div>
+      `;
+    }).join('');
+  }
+
+  function renderTotales(totalApostado, enReserva, portfolio) {
+    const el = document.getElementById('calcTotales');
+    el.innerHTML = `
+      <div class="total-item">
+        <span class="total-label">Total apostado:</span>
+        <span class="total-val">${fmt(totalApostado)} (${pct(totalApostado/portfolio*100)})</span>
+      </div>
+      <div class="total-item">
+        <span class="total-label">En reserva efectiva:</span>
+        <span class="total-val green">${fmt(enReserva)} (${pct(enReserva/portfolio*100)})</span>
+      </div>
+      <div class="total-disclaimer">⚠️ Solo informativo. No constituye consejo financiero.</div>
+    `;
+    el.style.display = 'flex';
+  }
+
+  // Recalcular al presionar Enter en el input
+  document.addEventListener('DOMContentLoaded', () => {
+    document.getElementById('portfolioInput').addEventListener('keydown', e => {
+      if (e.key === 'Enter') calcular();
+    });
+  });
 </script>
 
 </body>
