@@ -55,7 +55,7 @@ NEA_UMBRAL     = 5.0
 SCALP_UMBRAL   = 20.0   # NEA mínimo (absoluto) para calificar como scalping
 SCALP_REAL     = 40.0   # valor_real mínimo para scalping
 REAL_GAP_MIN   = 15.0   # diferencia mínima entre real_values para "quien gana"
-GEMINI_MODEL   = "gemini-flash-lite-latest"
+GEMINI_MODEL   = "gemini-3-flash-preview"
 
 HEADERS = {"User-Agent": "Mozilla/5.0"}
 SESSION = requests.Session()
