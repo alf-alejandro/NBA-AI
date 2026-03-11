@@ -1,25 +1,22 @@
 """
 ╔══════════════════════════════════════════════════════════════╗
-║          SOCCER EDGE ALPHA BOT  v4.0                        ║
-║  Detecta oportunidades de valor en Polymarket Soccer        ║
+║          NBA EDGE ALPHA BOT  v3.5                           ║
+║  Detecta oportunidades de valor en Polymarket NBA           ║
 ║                                                              ║
-║  ARQUITECTURA:                                              ║
-║  1. Gemini busca los partidos de fútbol de HOY en Polymarket║
-║  2. Gemini analiza cada partido (odds Vegas, noticias, etc) ║
-║  3. Polymarket: busca el evento por nombre y obtiene precios ║
-║  4. Fórmula SEA calcula valor y oportunidades               ║
-║                                                              ║
-║  FÓRMULA SEA (Soccer Edge Alpha):                           ║
+║  FÓRMULA NEA (NBA Edge Alpha):                              ║
 ║  valor_raw  = 0.55·P_Vegas + 0.30·N_norm + 0.10·R + (±5V) ║
-║  (Draw: sin ventaja de localía, promedio de ambos equipos)  ║
-║  penalización titulares: -10% si >2 fuera, -15% si ≥4      ║
-║  valor_real = normalizado a 100 entre los 3 outcomes        ║
-║  SEA        = P_Poly - valor_real                           ║
+║  penalización estrellas: -10% si >2 fuera, -15% si ≥4     ║
+║  valor_real = normalizado a 100 entre ambos equipos         ║
+║  NEA        = P_Poly - valor_real                           ║
 ║                                                              ║
-║  🎰 SCALPING  : SEA ≤ -20 y valor_real ≥ 30               ║
-║  🏆 QUIEN GANA: gap entre outcomes ≥ REAL_GAP_MIN          ║
+║  RESUMEN FINAL:                                             ║
+║  🎰 SCALPING  : NEA ≤ -20 y valor_real ≥ 40               ║
+║                 Comprar pre-partido, vender antes tip-off   ║
+║  🏆 QUIEN GANA: equipo con mayor real_value cuando el gap  ║
+║                 entre los dos equipos es ≥ REAL_GAP_MIN    ║
 ║                                                              ║
-║  Requiere: pip install requests google-genai                ║
+║  Requiere:                                                   ║
+║    pip install requests google-genai                        ║
 ╚══════════════════════════════════════════════════════════════╝
 """
 
@@ -52,14 +49,14 @@ from google.genai import types
 
 # ── Configuración ─────────────────────────────────────────────────────────────
 
-GAMMA_API    = "https://gamma-api.polymarket.com"
-CLOB_API     = "https://clob.polymarket.com"
-SEA_UMBRAL   = 5.0
-SCALP_UMBRAL = 20.0
-SCALP_REAL   = 30.0
-REAL_GAP_MIN = 12.0
-GEMINI_MODEL = "gemini-flash-lite-latest"
-GEMINI_RUNS  = 5
+GAMMA_API      = "https://gamma-api.polymarket.com"
+CLOB_API       = "https://clob.polymarket.com"
+NBA_SERIES_ID  = 10345
+NEA_UMBRAL     = 5.0
+SCALP_UMBRAL   = 20.0   # NEA mínimo (absoluto) para calificar como scalping
+SCALP_REAL     = 40.0   # valor_real mínimo para scalping
+REAL_GAP_MIN   = 15.0   # diferencia mínima entre real_values para "quien gana"
+GEMINI_MODEL   = "gemini-flash-lite-latest"
 
 HEADERS = {"User-Agent": "Mozilla/5.0"}
 SESSION = requests.Session()
@@ -67,143 +64,37 @@ SESSION.headers.update(HEADERS)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# MÓDULO 1 — GEMINI: obtener lista de partidos del día en Polymarket
+# MÓDULO 1 — POLYMARKET (Gamma + CLOB)
 # ══════════════════════════════════════════════════════════════════════════════
 
-def obtener_partidos_gemini() -> list[dict]:
-    """
-    Usa Gemini + Google Search para obtener los partidos de fútbol
-    disponibles HOY en Polymarket. Devuelve lista de dicts:
-      { local, visitante, liga, hora_utc }
-    """
-    api_key = os.environ.get("GEMINI_API_KEY", "")
-    if not api_key:
-        raise ValueError("Variable de entorno GEMINI_API_KEY no configurada")
-    client = genai.Client(api_key=api_key)
-
+def obtener_partidos_hoy() -> list[dict]:
     hoy = date.today().strftime("%Y-%m-%d")
-    prompt = f"""Busca en Polymarket (polymarket.com) los partidos de futbol (soccer) disponibles HOY {hoy}.
-
-Busca en: https://polymarket.com/predictions/soccer
-
-Devuelve SOLO un JSON con la lista de partidos encontrados en Polymarket hoy. Formato exacto:
-{{
-  "partidos": [
-    {{
-      "local": "<nombre exacto del equipo local tal como aparece en Polymarket>",
-      "visitante": "<nombre exacto del equipo visitante tal como aparece en Polymarket>",
-      "liga": "<nombre de la liga o competicion>",
-      "hora_utc": "<hora aproximada en formato HH:MM UTC, o vacio si no disponible>"
-    }}
-  ]
-}}
-
-IMPORTANTE:
-- Solo partidos de futbol (soccer), NO tenis, NBA, NFL u otros deportes
-- Solo partidos con mercado activo en Polymarket HOY {hoy}
-- Usa los nombres exactos de los equipos como aparecen en Polymarket
-- Si no hay partidos hoy en Polymarket, devuelve {{"partidos": []}}
-- Responde SOLO el JSON, sin markdown, sin explicaciones"""
-
-    try:
-        respuesta_texto = ""
-        for chunk in client.models.generate_content_stream(
-            model=GEMINI_MODEL,
-            contents=[types.Content(role="user", parts=[types.Part.from_text(text=prompt)])],
-            config=types.GenerateContentConfig(
-                thinking_config=types.ThinkingConfig(thinking_budget=0),
-                tools=[types.Tool(googleSearch=types.GoogleSearch())],
-            ),
-        ):
-            if chunk.text:
-                respuesta_texto += chunk.text
-
-        respuesta_texto = re.sub(r"```json|```", "", respuesta_texto).strip()
-        match = re.search(r"\{.*\}", respuesta_texto, re.DOTALL)
-        if match:
-            data = json.loads(match.group())
-            partidos = data.get("partidos", [])
-            print(f"  Gemini encontro {len(partidos)} partido(s) en Polymarket")
-            for p in partidos:
-                print(f"     {p.get('local','?')} vs {p.get('visitante','?')}  [{p.get('liga','?')}]  {p.get('hora_utc','')}")
-            return partidos
-        else:
-            print(f"  Gemini no devolvio JSON valido")
-            print(f"  Respuesta: {respuesta_texto[:300]}")
-            return []
-    except Exception as e:
-        print(f"  Error Gemini (lista partidos): {e}")
-        return []
+    resp = SESSION.get(
+        f"{GAMMA_API}/events",
+        params={
+            "series_id": NBA_SERIES_ID, "tag_id": 100639,
+            "active": "true", "closed": "false",
+            "limit": 100, "order": "startTime", "ascending": "true",
+        }, timeout=15
+    )
+    resp.raise_for_status()
+    todos = resp.json()
+    return [e for e in todos if hoy in str(e.get("eventDate", ""))]
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# MÓDULO 2 — POLYMARKET: buscar evento y obtener precios
-# ══════════════════════════════════════════════════════════════════════════════
-
-def buscar_evento_polymarket(local: str, visitante: str) -> dict | None:
-    """
-    Busca en Polymarket el evento del partido.
-    Pagina los eventos activos y busca por nombre de equipo.
-    """
-    local_l     = local.lower()
-    visitante_l = visitante.lower()
-
-    # Palabras clave del equipo local (ignorar palabras cortas o genéricas)
-    STOP = {"fc", "cf", "sc", "afc", "the", "de", "del", "los", "las", "and"}
-    palabras_local = [w for w in re.split(r'\W+', local_l)
-                      if len(w) >= 4 and w not in STOP]
-    palabras_visit = [w for w in re.split(r'\W+', visitante_l)
-                      if len(w) >= 4 and w not in STOP]
-
-    for offset in range(0, 2001, 200):
-        try:
-            r = SESSION.get(
-                f"{GAMMA_API}/events",
-                params={"order": "id", "ascending": "false",
-                        "closed": "false", "active": "true",
-                        "limit": 200, "offset": offset},
-                timeout=20,
-            )
-            if r.status_code != 200:
-                break
-            data  = r.json()
-            batch = data if isinstance(data, list) else data.get("data", [])
-            if not batch:
-                break
-
-            for e in batch:
-                titulo = e.get("title", "").lower()
-
-                # Verificar que el evento tiene mercado con Draw
-                tiene_draw = False
-                for m in e.get("markets", []):
-                    raw = m.get("outcomes", "[]")
-                    try:
-                        outs = json.loads(raw) if isinstance(raw, str) else raw
-                    except Exception:
-                        outs = []
-                    if any("draw" in str(o).lower() for o in outs):
-                        tiene_draw = True
-                        break
-                if not tiene_draw:
-                    continue
-
-                # Match: al menos 1 palabra del local Y 1 del visitante en el título
-                match_local = any(w in titulo for w in palabras_local) or local_l in titulo
-                match_visit = any(w in titulo for w in palabras_visit) or visitante_l in titulo
-
-                if match_local and match_visit:
-                    print(f"     Encontrado: {e.get('title','?')[:60]}")
-                    return e
-
-            if len(batch) < 200:
-                break
-
-        except Exception as ex:
-            print(f"     Error offset={offset}: {ex}")
-            break
-
-    print(f"     No encontrado en Polymarket: {local} vs {visitante}")
+def clasificar_mercado(pregunta: str) -> str | None:
+    p, pl = pregunta.strip(), pregunta.lower()
+    excluir = [
+        "points o/u", "rebounds o/u", "assists o/u", "steals o/u",
+        "blocks o/u", "turnovers o/u", "3-pointer", "field goal", "free throw",
+        "first quarter", "second quarter", "third quarter", "fourth quarter",
+        "first half", "second half", "halftime", "triple double", "double double",
+        "will there be", "lead at any", "margin of victory", "largest lead",
+    ]
+    if any(ex in pl for ex in excluir): return None
+    if p.startswith("Spread:"):                          return "📐 Spread"
+    if ": O/U" in p:                                     return "🎯 Total O/U"
+    if ("vs." in pl or " vs " in pl) and ":" not in p:  return "💰 Moneyline"
     return None
 
 
@@ -217,32 +108,6 @@ def extraer_outcomes(m: dict) -> list[str]:
     raw = m.get("outcomes", "[]")
     try:   return json.loads(raw) if isinstance(raw, str) else raw
     except: return []
-
-
-def seleccionar_mercado_1x2(evento: dict) -> dict | None:
-    """Selecciona el mercado 1X2 con Draw de mayor volumen."""
-    EXCLUIR = [
-        "total goals", "both teams", "correct score", "first half", "second half",
-        "anytime scorer", "yellow card", "red card", "corner", "penalty",
-        "clean sheet", "player", "assists", "hat trick",
-    ]
-    candidatos = []
-    for m in evento.get("markets", []):
-        if any(ex in m.get("question", "").lower() for ex in EXCLUIR):
-            continue
-        outcomes  = extraer_outcomes(m)
-        token_ids = extraer_token_ids(m)
-        if not token_ids or len(token_ids) != len(outcomes):
-            continue
-        if not any("draw" in str(o).lower() for o in outcomes):
-            continue
-        candidatos.append({
-            "pregunta":  m.get("question", ""),
-            "volumen":   float(m.get("volume", 0) or 0),
-            "token_ids": token_ids,
-            "outcomes":  outcomes,
-        })
-    return max(candidatos, key=lambda x: x["volumen"]) if candidatos else None
 
 
 def precio_clob(token_id: str) -> tuple[str, float | None]:
@@ -267,32 +132,63 @@ def obtener_precios_paralelo(token_ids: list[str]) -> dict[str, float]:
     return resultado
 
 
+def construir_estructura(partidos: list[dict]) -> list[dict]:
+    estructura = []
+    for evento in partidos:
+        candidatos = []
+        for m in evento.get("markets", []):
+            tipo = clasificar_mercado(m.get("question", ""))
+            if not tipo: continue
+            token_ids = extraer_token_ids(m)
+            if not token_ids: continue
+            candidatos.append({
+                "tipo":      tipo,
+                "pregunta":  m.get("question", ""),
+                "volumen":   float(m.get("volume", 0) or 0),
+                "token_ids": token_ids,
+                "outcomes":  extraer_outcomes(m),
+            })
+        seleccionados = {}
+        for c in sorted(candidatos, key=lambda x: x["volumen"], reverse=True):
+            if c["tipo"] not in seleccionados:
+                seleccionados[c["tipo"]] = c
+            if len(seleccionados) == 3: break
+        if seleccionados:
+            estructura.append({"evento": evento, "mercados": seleccionados})
+    return estructura
+
+
 # ══════════════════════════════════════════════════════════════════════════════
-# MÓDULO 3 — GEMINI: análisis de partido (odds, noticias, rachas)
+# MÓDULO 2 — GEMINI
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _llamar_gemini_una_vez(client, local: str, visitante: str) -> dict | None:
-    prompt = f"""Eres un analista experto de apuestas deportivas de futbol (soccer).
-Analiza el partido de HOY: {visitante} (visitante) @ {local} (local).
+GEMINI_RUNS = 5   # cuántas veces consultar Gemini por partido y promediar
 
-Usando busqueda web, responde EXACTAMENTE en este formato JSON (sin markdown):
+
+def _llamar_gemini_una_vez(client, equipo_local: str,
+                            equipo_visitante: str) -> dict | None:
+    """Una sola llamada a Gemini. Devuelve dict con los valores o None si falla."""
+    prompt = f"""Eres un analista experto de apuestas deportivas NBA.
+Necesito que analices el partido de HOY: {equipo_visitante} (visitante) @ {equipo_local} (local).
+
+Usando búsqueda web, encuentra y responde EXACTAMENTE en este formato JSON (sin markdown, sin explicaciones):
 
 {{
-  "p_vegas_local": <0-100, probabilidad implicita del LOCAL segun casas de apuestas hoy>,
-  "p_vegas_draw": <0-100, probabilidad implicita de EMPATE segun casas de apuestas hoy>,
-  "p_vegas_visitante": <0-100, probabilidad implicita del VISITANTE segun casas de apuestas hoy>,
-  "n_local": <-100 a 100, factor noticias local: lesiones (-), plantilla completa (+)>,
-  "n_visitante": <-100 a 100, factor noticias visitante>,
-  "r_local": <0-100, racha local ultimos 5 partidos: 5W=100, 0W=0>,
-  "r_visitante": <0-100, racha visitante ultimos 5 partidos>,
-  "titulares_bajos_local": <0-5, titulares clave ausentes HOY en local>,
-  "titulares_bajos_visitante": <0-5, titulares clave ausentes HOY en visitante>,
-  "liga": "<nombre de la liga>",
-  "resumen": "<2 oraciones: estado ambos equipos, lesiones y contexto>"
+  "p_vegas": <número 0-100, probabilidad implícita del equipo LOCAL según las casas de apuestas hoy>,
+  "n_local": <número -100 a 100, factor noticias equipo local: lesiones clave (-), alineación completa (+)>,
+  "n_visitante": <número -100 a 100, factor noticias equipo visitante>,
+  "r_local": <número 0-100, racha equipo local últimos 5 partidos: 5 victorias=100, 0 victorias=0>,
+  "r_visitante": <número 0-100, racha equipo visitante últimos 5 partidos>,
+  "estrellas_bajas_local": <entero 0-5, número de jugadores All-Star o >18 PPG ausentes HOY en el equipo local>,
+  "estrellas_bajas_visitante": <entero 0-5, número de jugadores All-Star o >18 PPG ausentes HOY en el equipo visitante>,
+  "resumen": "<2 oraciones: estado actual de ambos equipos, lesiones importantes y contexto del partido>"
 }}
 
-IMPORTANTE: p_vegas_local + p_vegas_draw + p_vegas_visitante deben sumar ~100.
-Busca: odds Bet365/DraftKings/William Hill, lesiones confirmadas, ultimos 5 resultados.
+Busca específicamente:
+1. Odds actuales de casas como DraftKings, FanDuel o BetMGM para {equipo_local} vs {equipo_visitante}
+2. Lesiones o ausencias confirmadas para HOY — en especial jugadores All-Star o con >18 PPG de promedio
+3. Resultados de los últimos 5 partidos de cada equipo
+
 Responde SOLO el JSON."""
 
     try:
@@ -312,87 +208,106 @@ Responde SOLO el JSON."""
         match = re.search(r"\{.*\}", respuesta_texto, re.DOTALL)
         if match:
             data = json.loads(match.group())
-            p_l = float(data.get("p_vegas_local", 40))
-            p_d = float(data.get("p_vegas_draw", 25))
-            p_v = float(data.get("p_vegas_visitante", 35))
-            total = p_l + p_d + p_v
-            if total > 0:
-                p_l, p_d, p_v = p_l/total*100, p_d/total*100, p_v/total*100
             return {
-                "p_vegas_local":             p_l,
-                "p_vegas_draw":              p_d,
-                "p_vegas_visitante":         p_v,
-                "n_local":                   float(data.get("n_local", 0)),
-                "n_visitante":               float(data.get("n_visitante", 0)),
-                "r_local":                   float(data.get("r_local", 50)),
-                "r_visitante":               float(data.get("r_visitante", 50)),
-                "titulares_bajos_local":     int(data.get("titulares_bajos_local", 0)),
-                "titulares_bajos_visitante": int(data.get("titulares_bajos_visitante", 0)),
-                "liga":    data.get("liga", "Soccer"),
-                "resumen": data.get("resumen", "Sin informacion disponible."),
+                "p_vegas":                  float(data.get("p_vegas", 50)),
+                "n_local":                  float(data.get("n_local", 0)),
+                "n_visitante":              float(data.get("n_visitante", 0)),
+                "r_local":                  float(data.get("r_local", 50)),
+                "r_visitante":              float(data.get("r_visitante", 50)),
+                "estrellas_bajas_local":    int(data.get("estrellas_bajas_local", 0)),
+                "estrellas_bajas_visitante": int(data.get("estrellas_bajas_visitante", 0)),
+                "resumen":                  data.get("resumen", "Sin información disponible."),
             }
     except Exception as e:
-        print(f"    Error Gemini run: {e}")
+        print(f"    ⚠️  Error Gemini (run): {e}")
     return None
 
 
-def analizar_partido(local: str, visitante: str) -> dict:
+def analizar_partido_con_gemini(equipo_local: str, equipo_visitante: str,
+                                 linea_ml_local: float) -> dict:
+    """
+    Llama a Gemini GEMINI_RUNS veces y promedia los valores numéricos.
+    Esto reduce outliers causados por respuestas inconsistentes de la API.
+    """
     api_key = os.environ.get("GEMINI_API_KEY", "")
     if not api_key:
-        raise ValueError("GEMINI_API_KEY no configurada")
-    client = genai.Client(api_key=api_key)
+        raise ValueError("Variable de entorno GEMINI_API_KEY no configurada")
+    client  = genai.Client(api_key=api_key)
 
     resultados = []
-    for _ in range(GEMINI_RUNS):
-        r = _llamar_gemini_una_vez(client, local, visitante)
+    for i in range(GEMINI_RUNS):
+        r = _llamar_gemini_una_vez(client, equipo_local, equipo_visitante)
         if r:
             resultados.append(r)
 
     if not resultados:
-        return _valores_defecto()
+        return _valores_defecto(linea_ml_local)
 
-    campos_num = ["p_vegas_local", "p_vegas_draw", "p_vegas_visitante",
-                  "n_local", "n_visitante", "r_local", "r_visitante",
-                  "titulares_bajos_local", "titulares_bajos_visitante"]
-    prom = {c: sum(r[c] for r in resultados) / len(resultados) for c in campos_num}
-    prom["titulares_bajos_local"]     = round(prom["titulares_bajos_local"])
-    prom["titulares_bajos_visitante"] = round(prom["titulares_bajos_visitante"])
-    prom["resumen"] = resultados[-1]["resumen"]
-    prom["liga"]    = resultados[-1]["liga"]
+    # Promediar todos los valores numéricos entre los runs
+    campos = ["p_vegas", "n_local", "n_visitante", "r_local", "r_visitante",
+              "estrellas_bajas_local", "estrellas_bajas_visitante"]
+    promedio = {c: sum(r[c] for r in resultados) / len(resultados) for c in campos}
+    # Redondear conteos de estrellas al entero más cercano
+    promedio["estrellas_bajas_local"]     = round(promedio["estrellas_bajas_local"])
+    promedio["estrellas_bajas_visitante"] = round(promedio["estrellas_bajas_visitante"])
+    promedio["resumen"] = resultados[-1]["resumen"]   # resumen del último run
 
+    # Mostrar valores individuales si hubo más de un run (para detectar outliers)
     if len(resultados) > 1:
-        for c in campos_num:
+        for c in campos:
             vals = [f"{r[c]:.0f}" for r in resultados]
-            avg  = prom[c]
-            desv = max(abs(r[c] - avg) for r in resultados)
-            flag = "  OUTLIER" if desv > 20 else ""
-            print(f"      {c:<28}: [{' | '.join(vals)}] -> avg {avg:.1f}{flag}")
+            prom = promedio[c]
+            desv = max(abs(r[c] - prom) for r in resultados)
+            flag = "  ⚠️ outlier" if desv > 20 else ""
+            print(f"      {c:<14}: [{' | '.join(vals)}] → avg {prom:.1f}{flag}")
 
-    return prom
+    return promedio
 
 
-def _valores_defecto() -> dict:
+def _valores_defecto(linea_ml_local: float) -> dict:
     return {
-        "p_vegas_local": 45.0, "p_vegas_draw": 25.0, "p_vegas_visitante": 30.0,
-        "n_local": 0.0, "n_visitante": 0.0,
-        "r_local": 50.0, "r_visitante": 50.0,
-        "titulares_bajos_local": 0, "titulares_bajos_visitante": 0,
-        "liga": "Soccer", "resumen": "Analisis no disponible.",
+        "p_vegas":                  linea_ml_local * 100,
+        "n_local":                  0.0,
+        "n_visitante":              0.0,
+        "r_local":                  50.0,
+        "r_visitante":              50.0,
+        "estrellas_bajas_local":    0,
+        "estrellas_bajas_visitante": 0,
+        "resumen":                  "Análisis no disponible.",
     }
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# MÓDULO 4 — FÓRMULA SEA + OUTPUT
+# MÓDULO 3 — FÓRMULA NEA
 # ══════════════════════════════════════════════════════════════════════════════
 
-def interpretar_sea(sea: float) -> tuple[str, str]:
-    if sea <= -SCALP_UMBRAL:
-        return "SCALPING", f"{abs(sea):.1f}pts descuento"
-    if sea <= -SEA_UMBRAL:
-        return "COMPRAR",  f"Precio {abs(sea):.1f}pts bajo valor real"
-    if sea >= SEA_UMBRAL:
-        return "EVITAR",   f"Precio {sea:.1f}pts sobre valor real"
-    return "PRECIO JUSTO", f"SEA={sea:+.1f}"
+def interpretar_nea(nea: float) -> tuple[str, str]:
+    if nea <= -SCALP_UMBRAL:
+        return "🎰 SCALPING", f"{abs(nea):.1f}pts descuento"
+    if nea <= -NEA_UMBRAL:
+        return "🔥 COMPRAR",  f"Precio {abs(nea):.1f}pts bajo valor real"
+    if nea >= NEA_UMBRAL:
+        return "❌ EVITAR",   f"Precio {nea:.1f}pts sobre valor real"
+    return "➖ PRECIO JUSTO", f"NEA={nea:+.1f}"
+
+
+def extraer_equipos(titulo: str) -> tuple[str, str]:
+    for sep in [" vs. ", " vs "]:
+        if sep in titulo:
+            partes = titulo.split(sep, 1)
+            return partes[0].strip(), partes[1].strip()
+    return titulo, titulo
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# MÓDULO 4 — OUTPUT
+# ══════════════════════════════════════════════════════════════════════════════
+
+def hora_et(st: str) -> str:
+    try:
+        dt = datetime.fromisoformat(st.replace("Z", "+00:00"))
+        return (dt - timedelta(hours=5)).strftime("%I:%M %p ET")
+    except: return st
 
 
 def barra(valor: float, total: float = 100, largo: int = 20) -> str:
@@ -401,191 +316,222 @@ def barra(valor: float, total: float = 100, largo: int = 20) -> str:
     return "█" * lleno + "░" * (largo - lleno)
 
 
-def calcular_y_mostrar(partido_info: dict, analisis: dict,
-                        mercado: dict, precios: dict) -> tuple[list[dict], dict | None]:
-    local     = partido_info["local"]
-    visitante = partido_info["visitante"]
-    liga      = analisis.get("liga", partido_info.get("liga", "Soccer"))
-    hora      = partido_info.get("hora_utc", "")
-    titulo    = f"{local} vs. {visitante}"
+def imprimir_analisis(item: dict, analisis: dict,
+                      precios: dict) -> tuple[list[dict], dict | None]:
+    """
+    Devuelve:
+      - lista de oportunidades individuales (scalping / comprar / evitar)
+      - dict con el pronóstico 'quien gana' si el gap entre real values ≥ REAL_GAP_MIN
+    """
+    ev     = item["evento"]
+    titulo = ev.get("title", "?")
+    hora   = hora_et(ev.get("startTime", ""))
+    vol    = float(ev.get("volume", 0) or 0)
 
-    print(f"\n{'='*68}")
-    print(f"  {titulo.upper()}")
-    print(f"  {liga}   |   {hora}")
-    print(f"{'='*68}")
-    print(f"  {analisis['resumen']}")
-    print(f"{'-'*68}")
-
+    equipo_visit, equipo_local = extraer_equipos(titulo)
     oportunidades = []
     quien_gana    = None
 
-    outcomes  = mercado["outcomes"]
-    token_ids = mercado["token_ids"]
+    print(f"\n{'═'*68}")
+    print(f"  🏀  {titulo.upper()}")
+    print(f"  ⏰  {hora}   |   Vol ${vol:,.0f}")
+    print(f"{'═'*68}")
+    print(f"  📰  {analisis['resumen']}")
+    print(f"{'─'*68}")
 
-    def detectar_rol(outcome_str: str) -> str:
-        o = outcome_str.lower().strip()
-        if "draw" in o:
-            return "draw"
-        if local.lower() in o or o in local.lower():
-            return "local"
-        if visitante.lower() in o or o in visitante.lower():
-            return "visitante"
-        idx = outcomes.index(outcome_str)
-        return ["local", "draw", "visitante"][min(idx, 2)]
+    ml = item["mercados"].get("💰 Moneyline")
+    if not ml:
+        print("  ⚠️  Sin mercado Moneyline disponible")
+        return oportunidades, quien_gana
 
-    outcomes_calc = []
-    for outcome, token_id in zip(outcomes, token_ids):
+    # ── Pasada 1: calcular valores para todos los equipos ─────────────────────
+    equipos_calc = []
+    for outcome, token_id in zip(ml["outcomes"], ml["token_ids"]):
         precio_poly = precios.get(token_id)
         if precio_poly is None:
-            print(f"  Sin precio CLOB para: {outcome}")
+            print(f"  ⚠️  Sin precio CLOB para: {outcome}")
             continue
 
         p_poly_pct = precio_poly * 100
-        rol        = detectar_rol(outcome)
+        es_local   = (outcome.lower() == equipo_local.lower())
 
-        if rol == "local":
-            p_vegas         = analisis["p_vegas_local"]
-            n               = analisis["n_local"]
-            r               = analisis["r_local"]
-            titulares_bajos = analisis["titulares_bajos_local"]
-            v_factor        = +5.0
-        elif rol == "visitante":
-            p_vegas         = analisis["p_vegas_visitante"]
-            n               = analisis["n_visitante"]
-            r               = analisis["r_visitante"]
-            titulares_bajos = analisis["titulares_bajos_visitante"]
-            v_factor        = -5.0
+        v_factor = 5.0 if es_local else -5.0
+
+        if es_local:
+            p_vegas          = analisis["p_vegas"]
+            n                = analisis["n_local"]
+            r                = analisis["r_local"]
+            estrellas_bajas  = analisis["estrellas_bajas_local"]
         else:
-            p_vegas         = analisis["p_vegas_draw"]
-            n               = (analisis["n_local"] + analisis["n_visitante"]) / 2
-            r               = (analisis["r_local"] + analisis["r_visitante"]) / 2
-            titulares_bajos = 0
-            v_factor        = 0.0
+            p_vegas          = 100 - analisis["p_vegas"]
+            n                = analisis["n_visitante"]
+            r                = analisis["r_visitante"]
+            estrellas_bajas  = analisis["estrellas_bajas_visitante"]
 
         n_norm    = (n + 100) / 2
+        # Fix 2+3: pesos redistribuidos; V_factor (±5) se aplica como aditivo directo
         valor_raw = 0.55 * p_vegas + 0.30 * n_norm + 0.10 * r + v_factor
 
-        if titulares_bajos == 3:
-            penalty = 0.10
-        elif titulares_bajos >= 4:
-            penalty = 0.15
+        # Penalización por estrellas ausentes (independiente de racha y localía)
+        # >2 estrellas (All-Star / >18 PPG) fuera → -10%; ≥4 fuera → -15%
+        if estrellas_bajas == 3:
+            penalty_pct = 0.10
+        elif estrellas_bajas >= 4:
+            penalty_pct = 0.15
         else:
-            penalty = 0.0
-        valor_raw *= (1 - penalty)
+            penalty_pct = 0.0
+        valor_raw *= (1 - penalty_pct)
 
-        outcomes_calc.append({
-            "outcome":        outcome,
-            "token_id":       token_id,
-            "rol":            rol,
-            "p_poly_pct":     p_poly_pct,
-            "p_vegas":        p_vegas,
-            "n":              n,
-            "n_norm":         n_norm,
-            "v_factor":       v_factor,
-            "r":              r,
-            "titulares_bajos": titulares_bajos,
-            "penalty":        penalty,
-            "valor_raw":      valor_raw,
-            "valor_real":     valor_raw,
-            "sea":            0.0,
-            "partido":        titulo,
-            "hora":           hora,
-            "liga":           liga,
+        nea = p_poly_pct - valor_raw   # provisional, se recalcula tras normalizar
+
+        equipos_calc.append({
+            "outcome":         outcome,
+            "token_id":        token_id,
+            "es_local":        es_local,
+            "p_poly_pct":      p_poly_pct,
+            "p_vegas":         p_vegas,
+            "n":               n,
+            "n_norm":          n_norm,
+            "v_factor":        v_factor,
+            "r":               r,
+            "estrellas_bajas": estrellas_bajas,
+            "penalty_pct":     penalty_pct,
+            "valor_raw":       valor_raw,
+            "valor_real":      valor_raw,   # se normalizará a continuación
+            "nea":             nea,
+            "hora":            hora,
+            "partido":         titulo,
         })
 
-    if not outcomes_calc:
-        print("  Sin precios disponibles")
+    if not equipos_calc:
+        print("  ⚠️  Sin precios disponibles")
         return oportunidades, quien_gana
 
-    total_vr = sum(oc["valor_raw"] for oc in outcomes_calc)
-    if total_vr > 0:
-        for oc in outcomes_calc:
-            oc["valor_real"] = oc["valor_raw"] / total_vr * 100
-            oc["sea"]        = oc["p_poly_pct"] - oc["valor_real"]
+    # ── Fix 1: Normalizar valor_real a 100 (mercado binario) ──────────────────
+    if len(equipos_calc) == 2:
+        total_vr = sum(ec["valor_raw"] for ec in equipos_calc)
+        if total_vr > 0:
+            for ec in equipos_calc:
+                ec["valor_real"] = ec["valor_raw"] / total_vr * 100
+                ec["nea"] = ec["p_poly_pct"] - ec["valor_real"]
 
-    ROL_LABEL = {"local": "LOCAL    ", "visitante": "VISITANTE", "draw": "EMPATE   "}
-    ROL_ICON  = {"local": "[Casa]", "visitante": "[Visit]", "draw": "[Draw]"}
+    # ── Pasada 2: imprimir cada equipo ────────────────────────────────────────
+    for ec in equipos_calc:
+        emoji, desc = interpretar_nea(ec["nea"])
+        # SCALPING requiere también real ≥ SCALP_REAL
+        if emoji == "🎰 SCALPING" and ec["valor_real"] < SCALP_REAL:
+            emoji, desc = "🔥 COMPRAR", f"Precio {abs(ec['nea']):.1f}pts bajo valor real"
 
-    for oc in outcomes_calc:
-        etiqueta, desc = interpretar_sea(oc["sea"])
-        if etiqueta == "SCALPING" and oc["valor_real"] < SCALP_REAL:
-            etiqueta, desc = "COMPRAR", f"Precio {abs(oc['sea']):.1f}pts bajo valor real"
+        rol  = "LOCAL   " if ec["es_local"] else "VISITANTE"
+        icon = "🏠" if ec["es_local"] else "✈️ "
+        print(f"\n  {icon} {ec['outcome'].upper()} ({rol})")
+        print(f"     P_Poly  : {ec['p_poly_pct']:5.1f}  {barra(ec['p_poly_pct'])}")
+        print(f"     P_Vegas : {ec['p_vegas']:5.1f}  {barra(ec['p_vegas'])}")
+        print(f"     Noticias: {ec['n']:+5.1f}  (norm: {ec['n_norm']:.1f})")
+        print(f"     Localía : {ec['v_factor']:+5.1f}")
+        print(f"     Racha   : {ec['r']:5.1f}  {barra(ec['r'])}")
+        if ec["estrellas_bajas"] > 0:
+            penalty_str = (f"  ⚠️  penalización -{ec['penalty_pct']*100:.0f}% aplicada"
+                           if ec["penalty_pct"] > 0 else "")
+            print(f"     Estrellas fuera: {ec['estrellas_bajas']}{penalty_str}")
+        print(f"     {'─'*50}")
+        print(f"     Valor Real: {ec['valor_real']:.1f}¢")
+        print(f"     NEA = {ec['p_poly_pct']:.1f} - {ec['valor_real']:.1f} = {ec['nea']:+.1f}")
+        print(f"     {emoji}: {desc}")
 
-        label = ROL_LABEL.get(oc["rol"], oc["rol"].upper())
-        icon  = ROL_ICON.get(oc["rol"], "")
-        print(f"\n  {icon} {oc['outcome'][:30]:<30} ({label})")
-        print(f"     P_Poly  : {oc['p_poly_pct']:5.1f}  {barra(oc['p_poly_pct'])}")
-        print(f"     P_Vegas : {oc['p_vegas']:5.1f}  {barra(oc['p_vegas'])}")
-        print(f"     Noticias: {oc['n']:+5.1f}  (norm: {oc['n_norm']:.1f})")
-        if oc["rol"] != "draw":
-            print(f"     Localia : {oc['v_factor']:+5.1f}")
-        print(f"     Racha   : {oc['r']:5.1f}  {barra(oc['r'])}")
-        if oc["titulares_bajos"] > 0:
-            pen_str = f"  -{oc['penalty']*100:.0f}% aplicado" if oc["penalty"] > 0 else ""
-            print(f"     Titulares ausentes: {oc['titulares_bajos']}{pen_str}")
-        print(f"     {'-'*50}")
-        print(f"     Valor Real: {oc['valor_real']:.1f}c")
-        print(f"     SEA = {oc['p_poly_pct']:.1f} - {oc['valor_real']:.1f} = {oc['sea']:+.1f}")
-        print(f"     >> {etiqueta}: {desc}")
+        if abs(ec["nea"]) >= NEA_UMBRAL:
+            accion = ("SCALPING — comprar y vender pre-partido"
+                      if emoji == "🎰 SCALPING" else
+                      "COMPRAR (precio bajo)"
+                      if ec["nea"] <= -NEA_UMBRAL else
+                      "EVITAR (precio alto)")
+            oportunidades.append({**ec, "accion": accion, "categoria": emoji})
 
-        if abs(oc["sea"]) >= SEA_UMBRAL:
-            accion = ("SCALPING" if etiqueta == "SCALPING" else
-                      "COMPRAR" if oc["sea"] <= -SEA_UMBRAL else "EVITAR")
-            oportunidades.append({**oc, "accion": accion, "categoria": etiqueta})
-
-    no_draw = [oc for oc in outcomes_calc if oc["rol"] != "draw"]
-    if len(no_draw) >= 2:
-        sorted_nd = sorted(no_draw, key=lambda x: x["valor_real"], reverse=True)
-        mejor  = sorted_nd[0]
-        segundo = sorted_nd[1]
-        gap = mejor["valor_real"] - segundo["valor_real"]
+    # ── Calcular QUIEN GANA para este partido ────────────────────────────────
+    if len(equipos_calc) == 2:
+        a, b  = equipos_calc[0], equipos_calc[1]
+        gap   = abs(a["valor_real"] - b["valor_real"])
         if gap >= REAL_GAP_MIN:
+            favorito  = a if a["valor_real"] > b["valor_real"] else b
+            underdog  = b if a["valor_real"] > b["valor_real"] else a
             quien_gana = {
-                "partido":       titulo,
-                "hora":          hora,
-                "liga":          liga,
-                "favorito":      mejor["outcome"],
-                "favorito_rol":  mejor["rol"],
-                "favorito_real": mejor["valor_real"],
-                "favorito_poly": mejor["p_poly_pct"],
-                "favorito_sea":  mejor["sea"],
-                "segundo":       segundo["outcome"],
-                "segundo_real":  segundo["valor_real"],
-                "segundo_poly":  segundo["p_poly_pct"],
-                "segundo_sea":   segundo["sea"],
-                "gap":           gap,
-                "outcomes_calc": outcomes_calc,
+                "partido":          titulo,
+                "hora":             hora,
+                "favorito":         favorito["outcome"],
+                "favorito_real":    favorito["valor_real"],
+                "favorito_poly":    favorito["p_poly_pct"],
+                "favorito_nea":     favorito["nea"],
+                "underdog":         underdog["outcome"],
+                "underdog_real":    underdog["valor_real"],
+                "underdog_poly":    underdog["p_poly_pct"],
+                "underdog_nea":     underdog["nea"],
+                "gap":              gap,
             }
+
+    # ── Spread y Total como referencia ────────────────────────────────────────
+    spr = item["mercados"].get("📐 Spread")
+    tot = item["mercados"].get("🎯 Total O/U")
+    print(f"\n  {'─'*66}")
+    print(f"  {'SPREAD':<32} {'TOTAL'}")
+    n_rows = max(
+        len(spr["outcomes"]) if spr else 0,
+        len(tot["outcomes"]) if tot else 0,
+    )
+    for row in range(n_rows):
+        spr_str = tot_str = ""
+        if spr and row < len(spr["outcomes"]):
+            o, tid = spr["outcomes"][row], spr["token_ids"][row]
+            p = precios.get(tid)
+            if p:
+                try:
+                    pts   = spr["pregunta"].split("(")[1].rstrip(")")
+                    pts_f = float(pts)
+                    fav   = spr["pregunta"].split(":")[1].split("(")[0].strip()
+                    pts_l = f"{pts_f:+.1f}" if o == fav else f"{-pts_f:+.1f}"
+                except: pts_l = ""
+                spr_str = f"  {o} {pts_l}  →  {round(p*100)}¢"
+        if tot and row < len(tot["outcomes"]):
+            o, tid = tot["outcomes"][row], tot["token_ids"][row]
+            p = precios.get(tid)
+            if p:
+                try:
+                    num    = tot["pregunta"].split("O/U")[1].strip()
+                    prefix = "O" if o.lower() == "over" else "U"
+                    tot_str = f"  {prefix} {num}  →  {round(p*100)}¢"
+                except: tot_str = f"  {o}  →  {round(p*100)}¢"
+        print(f"  {spr_str:<32} {tot_str}")
 
     return oportunidades, quien_gana
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# MÓDULO 5 — GUARDAR RESULTADOS
+# MÓDULO 5 — GUARDAR RESULTADOS PARA LA CALCULADORA WEB
 # ══════════════════════════════════════════════════════════════════════════════
 
 def guardar_resultados(todos_quienes: list[dict]) -> None:
+    """
+    Serializa los favoritos de 'quien gana' en resultados.json.
+    La calculadora web (app.py / index.html) lee este archivo.
+    """
     candidatos = []
     for qg in todos_quienes:
         candidatos.append({
             "equipo":  qg["favorito"],
             "partido": qg["partido"],
             "hora":    qg["hora"],
-            "liga":    qg.get("liga", "Soccer"),
-            "rol":     qg.get("favorito_rol", ""),
             "real":    round(qg["favorito_real"], 1),
             "poly":    round(qg["favorito_poly"], 1),
-            "sea":     round(qg["favorito_sea"],  1),
+            "nea":     round(qg["favorito_nea"],  1),
             "gap":     round(qg["gap"],            1),
             "edge":    round(qg["favorito_real"] - qg["favorito_poly"], 1),
         })
     candidatos.sort(key=lambda x: x["gap"], reverse=True)
 
-    data = {"fecha": str(date.today()), "candidatos": candidatos, "deporte": "soccer"}
-    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "resultados_soccer.json")
+    data = {"fecha": str(date.today()), "candidatos": candidatos}
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "resultados.json")
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
-    print(f"\n  resultados_soccer.json guardado -- {len(candidatos)} favorito(s)")
+    print(f"\n  💾 resultados.json guardado — {len(candidatos)} favorito(s) para la calculadora")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -593,133 +539,125 @@ def guardar_resultados(todos_quienes: list[dict]) -> None:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def main():
-    print("\n" + "=" * 68)
-    print("  SOCCER EDGE ALPHA BOT  v4.0  --  Detector de Oportunidades")
-    print("=" * 68)
-    print(f"\n  Fecha   : {date.today()}")
-    print(f"  Scalping: SEA <= -{SCALP_UMBRAL} y valor_real >= {SCALP_REAL}c")
-    print(f"  Quien gana: gap >= {REAL_GAP_MIN}c entre outcomes\n")
+    print("\n" + "╔" + "═"*66 + "╗")
+    print("║" + "  🏀  NBA EDGE ALPHA BOT  v3.5  —  Detector de Oportunidades".center(66) + "║")
+    print("╚" + "═"*66 + "╝")
+    print(f"\n  Fecha: {date.today()}")
+    print(f"  Scalping : NEA ≤ -{SCALP_UMBRAL} y valor_real ≥ {SCALP_REAL}¢")
+    print(f"  Quien gana: gap real_values ≥ {REAL_GAP_MIN}¢ entre los dos equipos\n")
 
-    # 1. Gemini busca los partidos del dia en Polymarket
-    print("[1/4] Buscando partidos de hoy en Polymarket via Gemini...")
+    # ── 1. Obtener partidos ───────────────────────────────────────────────────
+    print("📡 [1/4] Cargando partidos desde Polymarket...")
     try:
-        partidos_hoy = obtener_partidos_gemini()
+        partidos = obtener_partidos_hoy()
     except Exception as e:
-        print(f"  ERROR: {e}"); return
+        print(f"  ❌ Error: {e}"); return
 
-    if not partidos_hoy:
-        print("  Sin partidos de soccer en Polymarket hoy.")
-        return
-    print(f"  {len(partidos_hoy)} partido(s) a procesar\n")
+    if not partidos:
+        print("  Sin partidos para hoy."); return
+    print(f"  ✅ {len(partidos)} partido(s) encontrado(s)")
 
-    # 2. Para cada partido: buscar en Polymarket y obtener precios CLOB
-    print("[2/4] Buscando eventos en Polymarket y obteniendo precios CLOB...")
-    partidos_con_mercado = []
+    estructura = construir_estructura(partidos)
+    print(f"  📋 {len(estructura)} partido(s) con mercados válidos")
 
-    for p in partidos_hoy:
-        local     = p.get("local", "")
-        visitante = p.get("visitante", "")
-        print(f"\n  >> {local} vs {visitante}")
+    # ── 2. Precios CLOB ───────────────────────────────────────────────────────
+    print("\n💹 [2/4] Obteniendo precios CLOB...")
+    all_tokens = list({
+        tid
+        for item in estructura
+        for m in item["mercados"].values()
+        for tid in m["token_ids"]
+    })
+    precios = obtener_precios_paralelo(all_tokens)
+    print(f"  ✅ {len(precios)}/{len(all_tokens)} precios obtenidos")
 
-        evento = buscar_evento_polymarket(local, visitante)
-        if not evento:
-            continue
+    # ── 3. Análisis Gemini ────────────────────────────────────────────────────
+    print(f"\n🤖 [3/4] Analizando {len(estructura)} partido(s) con Gemini + Google Search...")
+    analisis_por_partido = {}
+    for item in estructura:
+        titulo = item["evento"].get("title", "?")
+        equipo_visit, equipo_local = extraer_equipos(titulo)
+        ml = item["mercados"].get("💰 Moneyline")
+        p_local_clob = 0.5
+        if ml:
+            for outcome, tid in zip(ml["outcomes"], ml["token_ids"]):
+                if outcome.lower() == equipo_local.lower() and tid in precios:
+                    p_local_clob = precios[tid]; break
+        print(f"  🔍 {titulo}  ({GEMINI_RUNS} runs → promedio)...")
+        analisis = analizar_partido_con_gemini(equipo_local, equipo_visit, p_local_clob)
+        analisis_por_partido[titulo] = analisis
+        print(f"     FINAL → Vegas={analisis['p_vegas']:.1f}  "
+              f"N_local={analisis['n_local']:+.1f}  "
+              f"N_visit={analisis['n_visitante']:+.1f}  "
+              f"R_local={analisis['r_local']:.1f}  "
+              f"R_visit={analisis['r_visitante']:.1f}  "
+              f"Stars_local={analisis['estrellas_bajas_local']}  "
+              f"Stars_visit={analisis['estrellas_bajas_visitante']}")
 
-        mercado = seleccionar_mercado_1x2(evento)
-        if not mercado:
-            print(f"     Sin mercado 1X2 con Draw")
-            continue
-
-        token_ids = mercado["token_ids"]
-        precios   = obtener_precios_paralelo(token_ids)
-        print(f"     {len(precios)}/{len(token_ids)} precios CLOB obtenidos")
-        print(f"     Outcomes: {mercado['outcomes']}")
-
-        partidos_con_mercado.append({
-            "info":    p,
-            "evento":  evento,
-            "mercado": mercado,
-            "precios": precios,
-        })
-
-    if not partidos_con_mercado:
-        print("\n  Sin partidos con mercado 1X2 valido en Polymarket.")
-        return
-    print(f"\n  {len(partidos_con_mercado)} partido(s) con mercado y precios\n")
-
-    # 3. Analisis Gemini por partido
-    print(f"[3/4] Analizando partidos con Gemini + Google Search...")
-    for item in partidos_con_mercado:
-        p = item["info"]
-        print(f"\n  >> {p['local']} vs {p['visitante']}  ({GEMINI_RUNS} runs)...")
-        analisis = analizar_partido(p["local"], p["visitante"])
-        item["analisis"] = analisis
-        print(f"     Vegas L={analisis['p_vegas_local']:.1f}  "
-              f"D={analisis['p_vegas_draw']:.1f}  V={analisis['p_vegas_visitante']:.1f}  "
-              f"N_l={analisis['n_local']:+.1f}  N_v={analisis['n_visitante']:+.1f}  "
-              f"R_l={analisis['r_local']:.1f}  R_v={analisis['r_visitante']:.1f}")
-
-    # 4. Calcular SEA
-    print(f"\n[4/4] Calculando Soccer Edge Alpha (SEA)...\n")
-    todas_ops     = []
+    # ── 4. Calcular NEA y mostrar análisis ────────────────────────────────────
+    print(f"\n📊 [4/4] Calculando NBA Edge Alpha (NEA)...\n")
+    todas_ops    = []
     todos_quienes = []
 
-    for item in partidos_con_mercado:
-        ops, qg = calcular_y_mostrar(
-            item["info"], item["analisis"],
-            item["mercado"], item["precios"],
-        )
+    for item in estructura:
+        titulo   = item["evento"].get("title", "?")
+        analisis = analisis_por_partido.get(titulo, _valores_defecto(0.5))
+        ops, qg  = imprimir_analisis(item, analisis, precios)
         todas_ops.extend(ops)
         if qg:
             todos_quienes.append(qg)
 
+    # ══════════════════════════════════════════════════════════════════════════
     # RESUMEN FINAL
-    print(f"\n\n{'='*68}")
-    print(f"  RESUMEN FINAL  --  SOCCER EDGE ALPHA v4.0")
-    print(f"{'='*68}")
+    # ══════════════════════════════════════════════════════════════════════════
+    print(f"\n\n{'═'*68}")
+    print(f"  📋  RESUMEN FINAL")
+    print(f"{'═'*68}")
 
-    scalping = [o for o in todas_ops if o["categoria"] == "SCALPING"]
-    print(f"\n  SCALPING  (SEA <= -{SCALP_UMBRAL} y real >= {SCALP_REAL}c)")
-    print(f"  {'-'*66}")
+    # ── SCALPING ──────────────────────────────────────────────────────────────
+    scalping = [o for o in todas_ops if o["categoria"] == "🎰 SCALPING"]
+    print(f"\n  🎰  SCALPING  (NEA ≤ -{SCALP_UMBRAL} y real ≥ {SCALP_REAL}¢)")
+    print(f"  {'─'*66}")
     if scalping:
-        for op in sorted(scalping, key=lambda x: abs(x["sea"]), reverse=True):
-            print(f"  >> {op['outcome']:<26} "
-                  f"Poly {op['p_poly_pct']:5.1f}c -> Real {op['valor_real']:5.1f}c  "
-                  f"SEA {op['sea']:+6.1f}  |  {op['hora']}")
+        for op in sorted(scalping, key=lambda x: abs(x["nea"]), reverse=True):
+            print(f"  ✔  {op['outcome']:<22} "
+                  f"Poly {op['p_poly_pct']:5.1f}¢ → Real {op['valor_real']:5.1f}¢  "
+                  f"NEA {op['nea']:+6.1f}  |  {op['hora']}")
             print(f"     {op['partido']}")
     else:
-        print(f"  -- Ninguno hoy")
+        print(f"  —  Ninguno hoy")
 
-    print(f"\n  QUIEN GANA  (gap real_values >= {REAL_GAP_MIN}c entre equipos)")
-    print(f"  {'-'*66}")
+    # ── QUIEN GANA ────────────────────────────────────────────────────────────
+    print(f"\n  🏆  QUIEN GANA  (gap real_values ≥ {REAL_GAP_MIN}¢ entre equipos)")
+    print(f"  {'─'*66}")
     if todos_quienes:
         for qg in sorted(todos_quienes, key=lambda x: x["gap"], reverse=True):
-            sea_fav = qg["favorito_sea"]
-            precio_label = (
-                "PRECIO BAJO" if sea_fav <= 0 else
-                "precio ok"  if sea_fav <= 10 else
-                "algo caro"  if sea_fav <= 20 else
-                "CARO"
-            )
-            print(f"\n  >> {qg['partido']}  |  {qg['hora']}  |  {qg.get('liga','')}")
-            print(f"     Gap: {qg['gap']:.1f}c")
-            print(f"     [1] {qg['favorito']:<26} Real {qg['favorito_real']:5.1f}c  "
-                  f"Poly {qg['favorito_poly']:5.1f}c  SEA {qg['favorito_sea']:+6.1f}  "
-                  f"<- {precio_label}")
-            print(f"     [2] {qg['segundo']:<26} Real {qg['segundo_real']:5.1f}c  "
-                  f"Poly {qg['segundo_poly']:5.1f}c  SEA {qg['segundo_sea']:+6.1f}")
-            draw_oc = next((oc for oc in qg.get("outcomes_calc", [])
-                            if oc["rol"] == "draw"), None)
-            if draw_oc:
-                print(f"     [X] {draw_oc['outcome']:<26} Real {draw_oc['valor_real']:5.1f}c  "
-                      f"Poly {draw_oc['p_poly_pct']:5.1f}c  SEA {draw_oc['sea']:+6.1f}")
+            # Evaluar si el precio del favorito es aceptable
+            nea_fav = qg["favorito_nea"]
+            if nea_fav <= 0:
+                precio_label = "PRECIO BAJO ✅"
+            elif nea_fav <= 10:
+                precio_label = "precio ok"
+            elif nea_fav <= 20:
+                precio_label = "algo caro"
+            else:
+                precio_label = "CARO ⚠️"
+
+            print(f"\n  ▶  {qg['partido']}  |  {qg['hora']}")
+            print(f"     Gap real: {qg['gap']:.1f}¢")
+            print(f"     🏆 {qg['favorito']:<20} Real {qg['favorito_real']:5.1f}¢  "
+                  f"Poly {qg['favorito_poly']:5.1f}¢  NEA {qg['favorito_nea']:+6.1f}  "
+                  f"← {precio_label}")
+            print(f"     👎 {qg['underdog']:<20} Real {qg['underdog_real']:5.1f}¢  "
+                  f"Poly {qg['underdog_poly']:5.1f}¢  NEA {qg['underdog_nea']:+6.1f}")
     else:
-        print(f"  -- Ningun partido con diferencia >= {REAL_GAP_MIN}c hoy")
+        print(f"  —  Ningún partido con diferencia ≥ {REAL_GAP_MIN}¢ hoy")
 
-    print(f"\n{'='*68}")
-    print(f"  Solo informativo. No constituye consejo financiero.")
-    print(f"{'='*68}")
+    print(f"\n{'═'*68}")
+    print(f"  ⚠️  Solo informativo. No constituye consejo financiero.")
+    print(f"{'═'*68}")
 
+    # ── Guardar resultados para la calculadora web ───────────────────────────
     guardar_resultados(todos_quienes)
 
 
