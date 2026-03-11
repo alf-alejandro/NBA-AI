@@ -1,6 +1,6 @@
 """
 ╔══════════════════════════════════════════════════════════════╗
-║          SOCCER EDGE ALPHA BOT  v3.0                        ║
+║          SOCCER EDGE ALPHA BOT  v3.1                        ║
 ║  Detecta oportunidades de valor en Polymarket Soccer        ║
 ║                                                              ║
 ║  FÓRMULA SEA (Soccer Edge Alpha):                           ║
@@ -63,15 +63,8 @@ HEADERS = {"User-Agent": "Mozilla/5.0"}
 SESSION = requests.Session()
 SESSION.headers.update(HEADERS)
 
-# Términos que indican empate en los outcomes de Polymarket
+# Términos que indican empate (usado en construir_estructura)
 DRAW_TERMS = {"draw", "tie", "empate", "neither", "no winner", "x", "draw/tie"}
-
-# Deportes que NO son soccer (para filtrar falsos positivos)
-NON_SOCCER_TAGS = {
-    "basketball", "nba", "ncaa", "nhl", "hockey", "nfl", "american-football",
-    "baseball", "mlb", "tennis", "golf", "rugby", "cricket", "mma", "ufc",
-    "formula-1", "nascar", "volleyball", "handball", "boxing", "euroleague",
-}
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -108,26 +101,6 @@ def _fecha_evento(e: dict) -> str:
     return "sin-fecha"
 
 
-def _tiene_outcomes_soccer(evento: dict) -> bool:
-    """
-    Acepta eventos con 2 o 3 outcomes que no sean Yes/No puros.
-    En Polymarket soccer: ['Team A', 'Draw (Team A vs Team B)', 'Team B']
-    o simplemente ['Team A', 'Team B'] sin draw explícito.
-    """
-    for m in evento.get("markets", []):
-        raw = m.get("outcomes", "[]")
-        try:
-            outs = json.loads(raw) if isinstance(raw, str) else raw
-        except Exception:
-            outs = []
-        o_lower = [str(o).strip().lower() for o in outs]
-        if all(o in {"yes", "no", "true", "false", "up", "down"} for o in o_lower):
-            continue
-        if len(outs) >= 2:
-            return True
-    return False
-
-
 def _es_more_markets(titulo: str) -> bool:
     tl = titulo.lower()
     return "more markets" in tl or "- additional" in tl
@@ -135,159 +108,126 @@ def _es_more_markets(titulo: str) -> bool:
 
 def obtener_partidos_hoy() -> list[dict]:
     """
-    v3.0: Usa category="Soccer" — la forma correcta y directa.
+    v3.1: Estrategia definitiva basada en diagnóstico real de la API.
 
-    Polymarket organiza sus eventos por CATEGORÍA, no por tag_id.
-    - NBA usa: category="NBA" (o series_id=10345)
-    - Soccer usa: category="Soccer"
+    HALLAZGOS DEL DIAGNÓSTICO (11-Mar-2026):
+    - category=   → IGNORADO, devuelve resultados random
+    - tag_id=     → 0 resultados (IDs obsoletos)
+    - tag_slug=soccer → solo mercados de temporada (World Cup Winner, UCL Winner)
+    - /tags       → 100 tags, ninguno para partidos individuales de fútbol
+    - /sports     → 156 items pero JSON con estructura diferente (campos vacíos)
 
-    La página polymarket.com/predictions/soccer lo confirma:
-    todos los partidos mostrados tienen category='Soccer'.
+    CONCLUSIÓN: Los partidos individuales de soccer NO tienen tag/category propio.
+    Se identifican ÚNICAMENTE porque alguno de sus outcomes contiene "Draw"
+    (ej: 'Draw (Crystal Palace FC vs. Tottenham Hotspur FC)').
 
-    También probamos subcategorías de ligas por si acaso.
+    ESTRATEGIA:
+    1. Paginar /events sin filtros (order=id desc = más recientes primero)
+    2. Para cada evento, buscar en sus markets si algún outcome contiene "Draw"
+    3. Si hay Draw → es un partido de fútbol individual → incluir
+    4. Filtrar por ventana de fechas (próximos DIAS_VENTANA días)
     """
     fechas_objetivo = [
         (date.today() + timedelta(days=i)).strftime("%Y-%m-%d")
         for i in range(DIAS_VENTANA)
     ]
+    fecha_ini = date.today()
+    fecha_fin = date.today() + timedelta(days=DIAS_VENTANA)
     print(f"  📅 Ventana: {fechas_objetivo[0]} → {fechas_objetivo[-1]}")
 
-    todos_eventos: dict[str, dict] = {}
+    todos_soccer: dict[str, dict] = {}
 
-    def agregar(lista: list[dict]) -> None:
-        for e in lista:
-            eid = e.get("id")
-            if eid:
-                todos_eventos[eid] = e
+    # ── Paginar /events sin filtros, más recientes primero ────────────────────
+    # Los partidos del día/semana tienen IDs altos (recientes).
+    # Paginamos hasta encontrar suficientes partidos de soccer o hasta offset 1000.
+    PAGINAS_MAX   = 10   # máximo de páginas a consultar (10 × 200 = 2000 eventos)
+    SOCCER_MIN    = 3    # parar si ya tenemos suficientes partidos
 
-    def fetch(params: dict, label: str) -> list[dict]:
+    print(f"\n  📡 Paginando /events (order=id desc) buscando partidos con Draw...")
+
+    for pagina in range(PAGINAS_MAX):
+        offset = pagina * 200
         try:
             resp = SESSION.get(
                 f"{GAMMA_API}/events",
-                params={"active": "true", "closed": "false",
-                        "limit": 200, "order": "startDate", "ascending": "true",
-                        **params},
+                params={
+                    "order":     "id",
+                    "ascending": "false",
+                    "closed":    "false",
+                    "active":    "true",
+                    "limit":     200,
+                    "offset":    offset,
+                },
                 timeout=20,
             )
             resp.raise_for_status()
-            data = resp.json()
-            result = data if isinstance(data, list) else data.get("data", [])
-            print(f"  🔎 {label}: {len(result)} eventos")
-            return result
+            data  = resp.json()
+            batch = data if isinstance(data, list) else data.get("data", [])
+
+            if not batch:
+                print(f"  ✋ Fin de resultados en página {pagina+1}")
+                break
+
+            # Filtrar eventos con Draw en esta página
+            encontrados_aqui = 0
+            for e in batch:
+                if _es_partido_soccer(e):
+                    eid = e.get("id")
+                    if eid and eid not in todos_soccer:
+                        todos_soccer[eid] = e
+                        encontrados_aqui += 1
+
+            print(f"  🔎 offset={offset:4d}: {len(batch)} eventos  → "
+                  f"{encontrados_aqui} soccer (total: {len(todos_soccer)})")
+
+            # Parar si ya tenemos suficientes y la última página no aportó nada nuevo
+            # (significa que los eventos más viejos ya no serán relevantes)
+            if len(todos_soccer) >= SOCCER_MIN and encontrados_aqui == 0:
+                break
+
+            # Parar si la página no llenó el límite (última página)
+            if len(batch) < 200:
+                break
+
         except Exception as ex:
-            print(f"  ⚠️  {label}: {ex}")
-            return []
+            print(f"  ⚠️  offset={offset}: {ex}")
+            break
 
-    # ── Estrategia 1: category=Soccer (forma directa, como NBA usa su categoría) ─
-    print("\n  📡 Estrategia 1: category=Soccer")
-    agregar(fetch({"category": "Soccer"}, "category=Soccer"))
+    print(f"\n  📦 Total partidos soccer detectados: {len(todos_soccer)}")
 
-    # ── Estrategia 2: category=soccer (minúsculas) ────────────────────────────
-    if len(todos_eventos) < 3:
-        agregar(fetch({"category": "soccer"}, "category=soccer"))
-
-    # ── Estrategia 3: subcategorías de ligas ─────────────────────────────────
-    LIGAS = [
-        "Premier League", "La Liga", "Champions League", "Serie A",
-        "Bundesliga", "Ligue 1", "MLS", "Europa League",
-        "Conference League", "Copa del Rey", "FA Cup",
-    ]
-    if len(todos_eventos) < 3:
-        print("\n  📡 Estrategia 3: subcategorías de ligas")
-        for liga in LIGAS:
-            agregar(fetch({"category": liga}, f"category={liga}"))
-            if len(todos_eventos) >= 30:
-                break
-
-    # ── Estrategia 4: tag_slug=soccer ────────────────────────────────────────
-    if len(todos_eventos) < 3:
-        print("\n  📡 Estrategia 4: tag_slug")
-        for slug in ["soccer", "football", "premier-league", "la-liga",
-                     "champions-league", "serie-a", "bundesliga"]:
-            agregar(fetch({"tag_slug": slug}, f"tag_slug={slug}"))
-            if len(todos_eventos) >= 30:
-                break
-
-    # ── Estrategia 5: paginación general (más nuevos primero) ─────────────────
-    if len(todos_eventos) < 3:
-        print("\n  📡 Estrategia 5: paginación general (order=id desc)")
-        for offset in [0, 200]:
-            try:
-                resp = SESSION.get(
-                    f"{GAMMA_API}/events",
-                    params={"order": "id", "ascending": "false",
-                            "closed": "false", "active": "true",
-                            "limit": 200, "offset": offset},
-                    timeout=20,
-                )
-                resp.raise_for_status()
-                data = resp.json()
-                batch = data if isinstance(data, list) else data.get("data", [])
-                print(f"  🔎 offset={offset}: {len(batch)} eventos")
-                agregar(batch)
-            except Exception as ex:
-                print(f"  ⚠️  offset={offset}: {ex}")
-                break
-
-    print(f"\n  📦 Total eventos cargados: {len(todos_eventos)}")
-    if not todos_eventos:
-        print("  ❌ Sin respuesta de la API.")
+    if not todos_soccer:
+        print("  ❌ Sin partidos de soccer. "
+              "Polymarket puede no tener partidos activos esta semana.")
         return []
 
-    # ── Debug: muestra los primeros 5 para diagnóstico ────────────────────────
-    print("\n  🔍 Muestra:")
-    for e in list(todos_eventos.values())[:5]:
+    # ── Debug: mostrar los encontrados ───────────────────────────────────────
+    print("\n  🔍 Partidos soccer encontrados:")
+    for e in list(todos_soccer.values())[:10]:
         _debug_evento(e)
 
-    # ── Filtrar partidos de soccer con outcomes válidos ────────────────────────
-    soccer_eventos = []
-    rechazados = []
-
-    for e in todos_eventos.values():
-        titulo = e.get("title", "")
-        cat    = (e.get("category") or "").lower()
-
-        if _es_more_markets(titulo):
-            continue
-
-        # Criterio primario: category contiene "soccer" (Polymarket lo pone explícito)
-        es_soccer_cat = "soccer" in cat or "football" in cat
-
-        # Criterio secundario por tags (si la categoría no basta)
-        tags = [
-            (t.get("slug", "") if isinstance(t, dict) else str(t)).lower()
-            for t in (e.get("tags") or [])
-        ]
-        tiene_bad_tag  = any(bad in " ".join(tags) for bad in NON_SOCCER_TAGS)
-        tiene_socc_tag = any(kw in " ".join(tags) for kw in
-                             ["soccer", "football", "premier", "liga", "champions",
-                              "bundesliga", "serie-a", "ligue", "europa", "mls"])
-        es_soccer_tag  = tiene_socc_tag and not tiene_bad_tag
-
-        # Criterio terciario: sufijo " fc" en el título (alta precisión)
-        es_soccer_titulo = bool(re.search(r'\bfc\b', titulo.lower()))
-
-        es_soccer = es_soccer_cat or es_soccer_tag or es_soccer_titulo
-        tiene_outs = _tiene_outcomes_soccer(e)
-
-        if es_soccer and tiene_outs:
-            soccer_eventos.append(e)
-        else:
-            rechazados.append(f"{titulo[:40]} [cat={cat}]")
-
-    print(f"\n  ⚽ Partidos soccer con outcomes válidos: {len(soccer_eventos)}")
-    if not soccer_eventos and rechazados:
-        print(f"  🔍 Rechazados (muestra): {rechazados[:5]}")
-
-    # ── Agrupar por fecha y retornar la ventana más próxima ───────────────────
+    # ── Filtrar por ventana de fechas ─────────────────────────────────────────
     por_fecha: dict[str, list] = {}
-    for e in soccer_eventos:
+    fuera_ventana = []
+    for e in todos_soccer.values():
         f = _fecha_evento(e)
-        por_fecha.setdefault(f, []).append(e)
+        if f == "sin-fecha":
+            por_fecha.setdefault("sin-fecha", []).append(e)
+            continue
+        try:
+            fd = date.fromisoformat(f)
+            if fecha_ini <= fd <= fecha_fin:
+                por_fecha.setdefault(f, []).append(e)
+            else:
+                fuera_ventana.append(f"{e.get('title','?')[:40]} [{f}]")
+        except Exception:
+            por_fecha.setdefault("sin-fecha", []).append(e)
 
     fechas_disp = sorted(k for k in por_fecha if k != "sin-fecha")
-    print(f"  📅 Fechas disponibles: {fechas_disp[:10]}")
+    if fuera_ventana:
+        print(f"  ℹ️  {len(fuera_ventana)} partidos fuera de la ventana (ej: {fuera_ventana[0]})")
+    print(f"  📅 Fechas en ventana: {fechas_disp}")
 
+    # ── Devolver la fecha más próxima con partidos ────────────────────────────
     for fd in fechas_objetivo:
         if fd in por_fecha:
             partidos = por_fecha[fd]
@@ -299,16 +239,53 @@ def obtener_partidos_hoy() -> list[dict]:
             return partidos
 
     if "sin-fecha" in por_fecha:
-        return por_fecha["sin-fecha"]
+        partidos = por_fecha["sin-fecha"]
+        print(f"\n  ℹ️  {len(partidos)} partidos sin fecha detectada — mostrando igualmente")
+        return partidos
 
-    # Último recurso: devolver todos sin filtro de fecha
-    if soccer_eventos:
-        print(f"  ℹ️  Sin partidos en la ventana — retornando {len(soccer_eventos)} partidos encontrados")
-        return soccer_eventos
+    # Último recurso: todos los soccer sin importar fecha
+    if todos_soccer:
+        partidos = list(todos_soccer.values())
+        print(f"\n  ℹ️  Sin partidos en ventana — retornando {len(partidos)} partidos soccer encontrados")
+        return partidos
 
-    print(f"\n  ⚠️  0 partidos de soccer encontrados.")
-    print(f"  → Polymarket puede no tener partidos de soccer activos en este momento.")
     return []
+
+
+def _es_partido_soccer(evento: dict) -> bool:
+    """
+    Criterio definitivo (v3.1): un evento ES un partido de fútbol individual
+    si alguno de sus outcomes contiene la palabra 'Draw'.
+
+    Polymarket usa: ['Crystal Palace FC', 'Draw (Crystal Palace vs Tottenham)', 'Tottenham']
+    o variantes como 'Draw', 'draw', 'DRAW'.
+
+    También acepta eventos donde los outcomes son 3 nombres propios (sin Yes/No/Up/Down)
+    y el título contiene " vs. " o " vs " — patrón inequívoco de partido individual.
+    """
+    titulo = evento.get("title", "").lower()
+    EXCLUIR = {"yes", "no", "true", "false", "up", "down", "over", "under"}
+
+    for m in evento.get("markets", []):
+        raw = m.get("outcomes", "[]")
+        try:
+            outs = json.loads(raw) if isinstance(raw, str) else raw
+        except Exception:
+            continue
+
+        o_lower = [str(o).strip().lower() for o in outs]
+
+        # Criterio 1 (principal): tiene outcome "draw" → partido 1X2
+        if any("draw" in o for o in o_lower):
+            return True
+
+        # Criterio 2: 3 outcomes, ninguno es Yes/No/Up/Down, título tiene " vs"
+        if (len(outs) == 3
+                and not any(o in EXCLUIR for o in o_lower)
+                and " vs" in titulo):
+            return True
+
+    return False
 
 
 def es_mercado_1x2(pregunta: str, outcomes: list) -> bool:
@@ -909,7 +886,7 @@ def guardar_resultados(todos_quienes: list[dict]) -> None:
 
 def main():
     print("\n" + "╔" + "═"*66 + "╗")
-    print("║" + "  ⚽  SOCCER EDGE ALPHA BOT  v3.0  —  Detector de Oportunidades".center(66) + "║")
+    print("║" + "  ⚽  SOCCER EDGE ALPHA BOT  v3.1  —  Detector de Oportunidades".center(66) + "║")
     print("╚" + "═"*66 + "╝")
     print(f"\n  Fecha: {date.today()}")
     print(f"  Scalping  : SEA ≤ -{SCALP_UMBRAL} y valor_real ≥ {SCALP_REAL}¢")
